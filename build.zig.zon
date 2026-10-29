@@ -1,0 +1,12 @@
+.{
+    .name = .Folassist,
+    .version = "1.0.0",
+    .fingerprint = 0x1e70dc883f74678f,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .translate_c = .{ .path = "vendor/translate-c" },
+    },
+
+    .paths = .{ "build.zig", "build.zig.zon", "src", "vendor" },
+}
+
