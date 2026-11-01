@@ -1,4 +1,4 @@
-name: libpiper
+name: libpiper-and-server
 
 on:
   workflow_dispatch:
@@ -42,30 +42,10 @@ jobs:
 
   libpiper-x86_64-musl:
     runs-on: ubuntu-24.04
-    container: alpine:edge
     steps:
-      - name: install tools
-        run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
-      - name: check onnxruntime files
-        run: ls /usr/lib | grep -i onnx || true
-      - name: prepare onnxruntime dir
-        run: |
-          VER=$(apk list -I onnxruntime | awk '{print $1}' | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
-          echo "onnxruntime version: $VER"
-          mkdir -p ort/lib ort/include
-          cp -P /usr/lib/libonnxruntime*.so* ort/lib/
-          ln -sf libonnxruntime.so.1 ort/lib/libonnxruntime.so
-          git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
-          git -C src-ort sparse-checkout set include
-          cp src-ort/include/onnxruntime/core/session/*.h ort/include/
-      - name: clone piper
-        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
-      - name: configure
-        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix" -DONNXRUNTIME_DIR="$PWD/ort"
-      - name: build
-        run: cmake --build build -j"$(nproc)"
-      - name: install
-        run: cmake --install build
+      - uses: actions/checkout@v4
+      - name: build in alpine
+        run: docker run --rm -v "$PWD:/w" -w /w alpine:edge sh scripts/libpiper_musl.sh
       - uses: actions/upload-artifact@v4
         with:
           name: libpiper-x86_64-musl
@@ -73,31 +53,111 @@ jobs:
 
   libpiper-aarch64-musl:
     runs-on: ubuntu-24.04-arm
-    container: alpine:edge
     steps:
-      - name: install tools
-        run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
-      - name: check onnxruntime files
-        run: ls /usr/lib | grep -i onnx || true
-      - name: prepare onnxruntime dir
-        run: |
-          VER=$(apk list -I onnxruntime | awk '{print $1}' | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
-          echo "onnxruntime version: $VER"
-          mkdir -p ort/lib ort/include
-          cp -P /usr/lib/libonnxruntime*.so* ort/lib/
-          ln -sf libonnxruntime.so.1 ort/lib/libonnxruntime.so
-          git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
-          git -C src-ort sparse-checkout set include
-          cp src-ort/include/onnxruntime/core/session/*.h ort/include/
-      - name: clone piper
-        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
-      - name: configure
-        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix" -DONNXRUNTIME_DIR="$PWD/ort"
-      - name: build
-        run: cmake --build build -j"$(nproc)"
-      - name: install
-        run: cmake --install build
+      - uses: actions/checkout@v4
+      - name: build in alpine
+        run: docker run --rm -v "$PWD:/w" -w /w alpine:edge sh scripts/libpiper_musl.sh
       - uses: actions/upload-artifact@v4
         with:
           name: libpiper-aarch64-musl
           path: prefix
+
+  server-x86_64-glibc:
+    needs: libpiper-x86_64-glibc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-x86_64-glibc
+          path: dist
+      - name: install zig
+        run: |
+          wget -q https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          tar -xJf zig-x86_64-linux-0.17.0.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+      - name: build folserver
+        run: |
+          cd Folserver
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-linux-gnu.2.31 -Dlibs="$PWD/../dist/lib" -Dinclude="$PWD/../dist/include"
+          mkdir -p ../out
+          cp zig-out/bin/folserver ../out/folserver-x86_64-glibc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-x86_64-glibc
+          path: out/folserver-x86_64-glibc
+
+  server-aarch64-glibc:
+    needs: libpiper-aarch64-glibc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-aarch64-glibc
+          path: dist
+      - name: install zig
+        run: |
+          wget -q https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          tar -xJf zig-x86_64-linux-0.17.0.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+      - name: build folserver
+        run: |
+          cd Folserver
+          zig build -Doptimize=ReleaseSmall -Dtarget=aarch64-linux-gnu.2.31 -Dlibs="$PWD/../dist/lib" -Dinclude="$PWD/../dist/include"
+          mkdir -p ../out
+          cp zig-out/bin/folserver ../out/folserver-aarch64-glibc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-aarch64-glibc
+          path: out/folserver-aarch64-glibc
+
+  server-x86_64-musl:
+    needs: libpiper-x86_64-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-x86_64-musl
+          path: dist
+      - name: install zig
+        run: |
+          wget -q https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          tar -xJf zig-x86_64-linux-0.17.0.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+      - name: build folserver
+        run: |
+          cd Folserver
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-linux-musl -Dlibs="$PWD/../dist/lib" -Dinclude="$PWD/../dist/include"
+          mkdir -p ../out
+          cp zig-out/bin/folserver ../out/folserver-x86_64-musl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-x86_64-musl
+          path: out/folserver-x86_64-musl
+
+  server-aarch64-musl:
+    needs: libpiper-aarch64-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-aarch64-musl
+          path: dist
+      - name: install zig
+        run: |
+          wget -q https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          tar -xJf zig-x86_64-linux-0.17.0.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+      - name: build folserver
+        run: |
+          cd Folserver
+          zig build -Doptimize=ReleaseSmall -Dtarget=aarch64-linux-musl -Dlibs="$PWD/../dist/lib" -Dinclude="$PWD/../dist/include"
+          mkdir -p ../out
+          cp zig-out/bin/folserver ../out/folserver-aarch64-musl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-aarch64-musl
+          path: out/folserver-aarch64-musl
