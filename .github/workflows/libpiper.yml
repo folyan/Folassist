@@ -57,7 +57,7 @@ jobs:
           ln -sf libonnxruntime.so.1 ort/lib/libonnxruntime.so
           git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
           git -C src-ort sparse-checkout set include
-          cp -r src-ort/include/onnxruntime/* ort/include/
+          cp src-ort/include/onnxruntime/core/session/*.h ort/include/
       - name: clone piper
         run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
       - name: configure
@@ -88,7 +88,7 @@ jobs:
           ln -sf libonnxruntime.so.1 ort/lib/libonnxruntime.so
           git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
           git -C src-ort sparse-checkout set include
-          cp -r src-ort/include/onnxruntime/* ort/include/
+          cp src-ort/include/onnxruntime/core/session/*.h ort/include/
       - name: clone piper
         run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
       - name: configure
