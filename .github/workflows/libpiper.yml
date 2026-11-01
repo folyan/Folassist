@@ -47,12 +47,16 @@ jobs:
       - name: install tools
         run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
       - name: check onnxruntime files
-        run: ls /usr/lib | grep -i onnx; ls /usr/include | grep -i onnx
+        run: ls /usr/lib | grep -i onnx || true
       - name: prepare onnxruntime dir
         run: |
+          VER=$(apk info -v onnxruntime | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
+          echo "onnxruntime version: $VER"
           mkdir -p ort/lib ort/include
           cp -P /usr/lib/libonnxruntime*.so* ort/lib/
-          cp -r /usr/include/onnxruntime/* ort/include/ 2>/dev/null || true
+          git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
+          git -C src-ort sparse-checkout set include
+          cp -r src-ort/include/onnxruntime/* ort/include/
       - name: clone piper
         run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
       - name: configure
@@ -73,12 +77,16 @@ jobs:
       - name: install tools
         run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
       - name: check onnxruntime files
-        run: ls /usr/lib | grep -i onnx; ls /usr/include | grep -i onnx
+        run: ls /usr/lib | grep -i onnx || true
       - name: prepare onnxruntime dir
         run: |
+          VER=$(apk info -v onnxruntime | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
+          echo "onnxruntime version: $VER"
           mkdir -p ort/lib ort/include
           cp -P /usr/lib/libonnxruntime*.so* ort/lib/
-          cp -r /usr/include/onnxruntime/* ort/include/ 2>/dev/null || true
+          git clone --depth 1 --filter=blob:none --sparse --branch "v$VER" https://github.com/microsoft/onnxruntime src-ort
+          git -C src-ort sparse-checkout set include
+          cp -r src-ort/include/onnxruntime/* ort/include/
       - name: clone piper
         run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
       - name: configure
