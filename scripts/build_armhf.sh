@@ -34,6 +34,7 @@ OB_ARGS=(TARGET=ARMV7 HOSTCC=gcc CC="$CC" FC="$FC" AR="$AR" RANLIB="$RANLIB"
 make -j"$JOBS" "${OB_ARGS[@]}" libs netlib
 make "${OB_ARGS[@]}" PREFIX="$B/openblas-install" install
 OPENBLAS_A="$(ls "$B"/OpenBLAS/libopenblas_*.a | head -1)"
+ln -sf libopenblas.a "$B/openblas-install/lib/libopenblas.so"
 
 $CC -O2 -fPIC $ARCH -c "$ROOT/scripts/shim_dotsub.c" -o "$B/shim.o"
 $AR rcs "$B/shim.a" "$B/shim.o"
@@ -45,10 +46,13 @@ autoreconf -i
   CXXFLAGS="-Os $ARCH" CFLAGS="-Os $ARCH"
 make -j"$JOBS"
 make install
+cp -r "$B/openfst-install/include" "$B/openfst/"
+mkdir -p "$B/openfst/lib"
+cp "$B/openfst-install/lib/"* "$B/openfst/lib/"
 
 cd "$B/kaldi/src"
 ./configure --static --mathlib=OPENBLAS --use-cuda=no \
-  --openblas-root="$B/openblas-install" --fst-root="$B/openfst-install"
+  --openblas-root="$B/openblas-install" --fst-root="$B/openfst"
 sed -i 's/-msse2\?//g; s/-mavx[^ ]*//g; s/-mfma//g; s/-O[0-9]/-Os/g; s/ -g / /g' kaldi.mk
 sed -i "s|^CXXFLAGS = |CXXFLAGS = $ARCH -ffunction-sections -fdata-sections |" kaldi.mk
 MODS="online2 decoder ivector gmm tree feat lat lm rnnlm nnet3 matrix fstext util base hmm cudamatrix transform"
