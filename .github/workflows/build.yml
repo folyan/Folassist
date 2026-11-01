@@ -1,43 +1,43 @@
 name: build
 
 on:
+  push:
   workflow_dispatch:
 
 jobs:
   armhf:
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
         with:
           path: build
-          key: armhf-${{ hashFiles('scripts/build_armhf.sh') }}
-          restore-keys: armhf-
-      - name: Cross build (Ubuntu 20.04 container)
-        run: docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w ubuntu:20.04 bash scripts/build_armhf.sh
+          key: armhf-${{ hashFiles('scripts/build_armhf.sh', 'scripts/shim_dotsub.c') }}
+      - name: build armhf
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w ubuntu:20.04 bash -c "apt-get update -qq && apt-get install -y -qq git curl xz-utils make autoconf automake libtool pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf gfortran-arm-linux-gnueabihf file binutils wget unzip && bash scripts/build_armhf.sh"
       - uses: actions/upload-artifact@v4
         with:
-          name: folclient-armhf
+          name: armhf
           path: |
             out/folclient-armhf
+            out/folserver-armhf
             out/libvosk_fat.a
 
   aarch64:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
         with:
           path: build
-          key: aarch64-${{ hashFiles('scripts/build_aarch64.sh') }}
-          restore-keys: aarch64-
-      - name: Native build (Alpine arm64, musl)
-        run: docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.20 bash scripts/build_aarch64.sh
+          key: aarch64-${{ hashFiles('scripts/build_aarch64.sh', 'scripts/shim_dotsub.c') }}
+      - name: build aarch64
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/w" -w /w alpine:3.20 sh -c "apk add --no-cache bash && bash scripts/build_aarch64.sh"
       - uses: actions/upload-artifact@v4
         with:
-          name: folclient-aarch64
+          name: aarch64
           path: |
             out/folclient-aarch64
             out/libvosk_fat.a
