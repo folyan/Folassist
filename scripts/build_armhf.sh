@@ -62,11 +62,11 @@ printf 'include kaldi.mk\nprint:\n\t@echo $(CXXFLAGS)\n' > "$B/pf.mk"
 KFLAGS="$(make -s -f "$B/pf.mk" print)"
 
 cd "$B/vosk-api/src"
-for f in recognizer language_model model spk_model vosk_api; do
+for f in recognizer language_model model spk_model vosk_api postprocessor; do
   [ -f "$f.cc" ] || continue
-  $CXX -std=c++17 -fPIC $KFLAGS -DFST_NO_DYNAMIC_LINKING -I. -c "$f.cc" -o "$f.o"
+  $CXX -std=c++17 -fPIC $KFLAGS -DFST_NO_DYNAMIC_LINKING -I. -I"$B/kaldi/src" -c "$f.cc" -o "$f.o"
 done
-$AR rcs libvosk_base.a recognizer.o model.o vosk_api.o $( [ -f language_model.o ] && echo language_model.o ) $( [ -f spk_model.o ] && echo spk_model.o )
+$AR rcs libvosk_base.a $(for f in recognizer language_model model spk_model vosk_api postprocessor; do [ -f "$f.o" ] && echo "$f.o"; done)
 
 {
   echo "create $B/libvosk_fat.a"

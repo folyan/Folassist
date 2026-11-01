@@ -49,6 +49,7 @@ cd "$B/kaldi/src"
   --openblas-root="$B/openblas-install" --fst-root="$B/openfst"
 sed -i 's/-msse2\?//g; s/-mavx[^ ]*//g; s/-mfma//g; s/-O[0-9]/-Os/g; s/ -g / /g' kaldi.mk
 sed -i "s|^CXXFLAGS = |CXXFLAGS = -ffunction-sections -fdata-sections |" kaldi.mk
+sed -i 's/-DHAVE_EXECINFO_H=1//g' kaldi.mk
 MODS="online2 decoder ivector gmm tree feat lat lm rnnlm nnet3 matrix fstext util base hmm cudamatrix transform"
 nice -n 19 make -j"$JOBS" $MODS
 
