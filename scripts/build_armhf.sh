@@ -48,7 +48,7 @@ make -j"$JOBS"
 make install
 cp -r "$B/openfst-install/include" "$B/openfst/"
 mkdir -p "$B/openfst/lib"
-cp "$B/openfst-install/lib/"* "$B/openfst/lib/"
+cp -r "$B/openfst-install/lib/"* "$B/openfst/lib/"
 
 cd "$B/kaldi/src"
 ./configure --static --mathlib=OPENBLAS --use-cuda=no \
