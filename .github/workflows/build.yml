@@ -1,0 +1,43 @@
+name: build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  armhf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: build
+          key: armhf-${{ hashFiles('scripts/build_armhf.sh') }}
+          restore-keys: armhf-
+      - name: Cross build (Ubuntu 20.04 container)
+        run: docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w ubuntu:20.04 bash scripts/build_armhf.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folclient-armhf
+          path: |
+            out/folclient-armhf
+            out/libvosk_fat.a
+
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: build
+          key: aarch64-${{ hashFiles('scripts/build_aarch64.sh') }}
+          restore-keys: aarch64-
+      - name: Native build (Alpine arm64, musl)
+        run: docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.20 bash scripts/build_aarch64.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folclient-aarch64
+          path: |
+            out/folclient-aarch64
+            out/libvosk_fat.a

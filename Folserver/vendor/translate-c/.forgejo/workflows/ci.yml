@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - zig-0.17.x
+  pull_request:
+  workflow_dispatch:
+
+# This cancels older workflow runs on pull requests while ensuring that there
+# are no concurrency limits on pushes and manual workflow dispatches.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - aarch64-macos
+          - x86_64-freebsd
+          - x86_64-linux
+          - x86_64-netbsd
+          - x86_64-windows
+
+    runs-on:
+      - self-hosted
+      - ${{ matrix.host }}
+
+    steps:
+      - name: Checkout
+        uses: https://codeberg.org/ziglang/checkout@19af6bac491e2534a4687a50ee84fa7f13258d28
+
+      - name: Setup Zig
+        uses: https://codeberg.org/mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+
+      - name: Build
+        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }}
+
+      - name: Build 32-bit FreeBSD
+        if: matrix.host == 'x86_64-freebsd'
+        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-freebsd
+
+      - name: Build 32-bit Linux
+        if: matrix.host == 'x86_64-linux'
+        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-linux
+
+      - name: Build 32-bit NetBSD
+        if: matrix.host == 'x86_64-netbsd'
+        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-netbsd
+
+      - name: Run Tests
+        run: |
+          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug
+          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=ReleaseFast
+
+      - name: Run Tests MSVC
+        if: matrix.host == 'x86_64-windows'
+        run: |
+          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=Debug
+          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=ReleaseFast
+
+      - name: Run Cross-Translation Tests
+        run: zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug -Dtest-cross-targets
+
+      - name: Run Examples
+        run: zig build all --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig
