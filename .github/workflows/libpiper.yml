@@ -50,7 +50,7 @@ jobs:
         run: ls /usr/lib | grep -i onnx || true
       - name: prepare onnxruntime dir
         run: |
-          VER=$(apk info -v onnxruntime | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
+          VER=$(apk list -I onnxruntime | awk '{print $1}' | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
           echo "onnxruntime version: $VER"
           mkdir -p ort/lib ort/include
           cp -P /usr/lib/libonnxruntime*.so* ort/lib/
@@ -80,7 +80,7 @@ jobs:
         run: ls /usr/lib | grep -i onnx || true
       - name: prepare onnxruntime dir
         run: |
-          VER=$(apk info -v onnxruntime | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
+          VER=$(apk list -I onnxruntime | awk '{print $1}' | sed 's/^onnxruntime-//; s/-r[0-9]*$//')
           echo "onnxruntime version: $VER"
           mkdir -p ort/lib ort/include
           cp -P /usr/lib/libonnxruntime*.so* ort/lib/
