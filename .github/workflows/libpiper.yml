@@ -1,0 +1,25 @@
+name: libpiper-x86_64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  libpiper:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake ninja-build git pkg-config
+      - name: clone piper
+        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
+      - name: configure
+        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: install
+        run: cmake --install build
+      - name: list output
+        run: find prefix -maxdepth 3 -name "piper.h" -o -name "libpiper*" -o -name "libonnxruntime*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-x86_64
+          path: prefix
