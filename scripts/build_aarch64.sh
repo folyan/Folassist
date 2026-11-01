@@ -25,7 +25,8 @@ cd "$B/OpenBLAS"
 OB_ARGS=(TARGET=ARMV8 HOSTCC=gcc CC="$CC" FC="$FC" AR="$AR" RANLIB="$RANLIB"
   DYNAMIC_ARCH=0 NO_SHARED=1 USE_LOCKING=1 USE_THREAD=0
   CFLAGS="-Os -Wno-error=implicit-function-declaration" FFLAGS="-Os")
-make -j"$JOBS" "${OB_ARGS[@]}" libs netlib
+make -j"$JOBS" "${OB_ARGS[@]}" libs
+make "${OB_ARGS[@]}" netlib
 make "${OB_ARGS[@]}" PREFIX="$B/openblas-install" install
 OPENBLAS_A="$(ls "$B"/OpenBLAS/libopenblas_*.a | head -1)"
 ln -sf libopenblas.a "$B/openblas-install/lib/libopenblas.so"

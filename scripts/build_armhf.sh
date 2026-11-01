@@ -31,7 +31,8 @@ cd "$B/OpenBLAS"
 OB_ARGS=(TARGET=ARMV7 HOSTCC=gcc CC="$CC" FC="$FC" AR="$AR" RANLIB="$RANLIB"
   DYNAMIC_ARCH=0 NO_SHARED=1 USE_LOCKING=1 USE_THREAD=0
   CFLAGS="-Os $ARCH -Wno-error=implicit-function-declaration" FFLAGS="-Os $ARCH")
-make -j"$JOBS" "${OB_ARGS[@]}" libs netlib
+make -j"$JOBS" "${OB_ARGS[@]}" libs
+make "${OB_ARGS[@]}" netlib
 make "${OB_ARGS[@]}" PREFIX="$B/openblas-install" install
 OPENBLAS_A="$(ls "$B"/OpenBLAS/libopenblas_*.a | head -1)"
 ln -sf libopenblas.a "$B/openblas-install/lib/libopenblas.so"
@@ -106,10 +107,14 @@ cp zig-out/bin/folclient "$ROOT/out/folclient-armhf"
 $STRIP --strip-all "$ROOT/out/folclient-armhf"
 file "$ROOT/out/folclient-armhf" || true
 
-cd "$ROOT/Folserver"
-"$ZIG" build -Doptimize=ReleaseSmall \
-  -Dtarget=$T.2.30 \
-  -Dlibs="$ROOT/Folserver/vendor/lib" \
-  -Dinclude="$ROOT/Folserver/vendor/include"
-cp zig-out/bin/folserver "$ROOT/out/folserver-armhf"
-file "$ROOT/out/folserver-armhf" || true
+if [ -f "$ROOT/Folserver/vendor/include/piper.h" ] && [ -f "$ROOT/Folserver/vendor/lib/libpiper.so" ]; then
+  cd "$ROOT/Folserver"
+  "$ZIG" build -Doptimize=ReleaseSmall \
+    -Dtarget=$T.2.30 \
+    -Dlibs="$ROOT/Folserver/vendor/lib" \
+    -Dinclude="$ROOT/Folserver/vendor/include"
+  cp zig-out/bin/folserver "$ROOT/out/folserver-armhf"
+  file "$ROOT/out/folserver-armhf" || true
+else
+  echo "Folserver пропущен: нет Folserver/vendor/include/piper.h или Folserver/vendor/lib/libpiper.so"
+fi
