@@ -79,8 +79,9 @@ pub fn Net(comptime C: type) type {
             }
         }
 
-        pub fn writeAll(fd: c_int, buf: []const u8) !void {
-            const flags: c_int = @intCast(C.MSG_NOSIGNAL);
+        fn sendAll(fd: c_int, buf: []const u8, more: bool) !void {
+            var flags: c_int = @intCast(C.MSG_NOSIGNAL);
+            if (more) flags |= @as(c_int, @intCast(C.MSG_MORE));
             var sent: usize = 0;
             while (sent < buf.len) {
                 const n = C.send(fd, buf.ptr + sent, buf.len - sent, flags);
@@ -92,24 +93,26 @@ pub fn Net(comptime C: type) type {
             }
         }
 
-        pub fn sendFrame(alloc: std.mem.Allocator, fd: c_int, t: MsgType, parts: []const []const u8) !void {
-            return sendFrameF(alloc, fd, t, 0, parts);
+        pub fn writeAll(fd: c_int, buf: []const u8) !void {
+            return sendAll(fd, buf, false);
         }
 
-        pub fn sendFrameF(alloc: std.mem.Allocator, fd: c_int, t: MsgType, flags: u8, parts: []const []const u8) !void {
-            var total: usize = 0;
-            for (parts) |p| total += p.len;
-            if (total > MAX_PAYLOAD) return error.FrameTooLarge;
+        pub fn sendFrame(fd: c_int, t: MsgType, parts: []const []const u8) !void {
+            return sendFrameF(fd, t, 0, parts);
+        }
 
-            const buf = try alloc.alloc(u8, HEADER_LEN + total);
-            defer alloc.free(buf);
-            buf[0..HEADER_LEN].* = encodeHeader(t, flags, @intCast(total));
-            var off: usize = HEADER_LEN;
+        pub fn sendFrameF(fd: c_int, t: MsgType, flags: u8, parts: []const []const u8) !void {
+            var left: usize = 0;
+            for (parts) |p| left += p.len;
+            if (left > MAX_PAYLOAD) return error.FrameTooLarge;
+
+            const hdr = encodeHeader(t, flags, @intCast(left));
+            try sendAll(fd, &hdr, left > 0);
             for (parts) |p| {
-                @memcpy(buf[off..][0..p.len], p);
-                off += p.len;
+                if (p.len == 0) continue;
+                left -= p.len;
+                try sendAll(fd, p, left > 0);
             }
-            try writeAll(fd, buf);
         }
 
         pub fn recvHeader(fd: c_int) !Header {
@@ -139,7 +142,7 @@ pub fn Net(comptime C: type) type {
             if (size > MAX_MODEL) return error.FrameTooLarge;
 
             const hdr = encodeHeader(t, 0, @intCast(size));
-            try writeAll(fd, &hdr);
+            try sendAll(fd, &hdr, size > 0);
 
             var chunk: [64 * 1024]u8 = undefined;
             var left: u64 = size;

@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Кросс-сборка folclient под armhf (glibc). Запускать из корня репозитория внутри ubuntu:20.04.
-# Результат: out/folclient и out/libvosk_fat.a
 set -euxo pipefail
 
 ROOT="$(pwd)"
@@ -29,7 +27,6 @@ ZIG="$B/zig-x86_64-linux-0.17.0/zig"
 [ -d OpenBLAS ] || git clone --depth 1 -b v0.3.20 --single-branch https://github.com/xianyi/OpenBLAS
 [ -d openfst ]  || git clone --depth 1 https://github.com/alphacep/openfst
 
-# --- OpenBLAS + LAPACK
 cd "$B/OpenBLAS"
 OB_ARGS=(TARGET=ARMV7 HOSTCC=gcc CC="$CC" FC="$FC" AR="$AR" RANLIB="$RANLIB"
   DYNAMIC_ARCH=0 NO_SHARED=1 USE_LOCKING=1 USE_THREAD=0
@@ -41,7 +38,6 @@ OPENBLAS_A="$(ls "$B"/OpenBLAS/libopenblas_*.a | head -1)"
 $CC -O2 -fPIC $ARCH -c "$ROOT/scripts/shim_dotsub.c" -o "$B/shim.o"
 $AR rcs "$B/shim.a" "$B/shim.o"
 
-# --- OpenFST
 cd "$B/openfst"
 autoreconf -i
 ./configure --host=$T --prefix="$B/openfst-install" --enable-static --disable-shared \
@@ -49,32 +45,24 @@ autoreconf -i
   CXXFLAGS="-Os $ARCH" CFLAGS="-Os $ARCH"
 make -j"$JOBS"
 make install
-cp -r "$B/openfst-install/include" "$B/openfst/"
-mkdir -p "$B/openfst/lib" && cp "$B/openfst-install/lib/"*.a "$B/openfst/lib/"
 
-# --- Kaldi
-mkdir -p "$B/openblas-install/lib"
-cp "$OPENBLAS_A" "$B/openblas-install/lib/libopenblas.a"
-ln -sf libopenblas.a "$B/openblas-install/lib/libopenblas.so"
 cd "$B/kaldi/src"
 ./configure --static --mathlib=OPENBLAS --use-cuda=no \
-  --openblas-root="$B/openblas-install" --fst-root="$B/openfst"
-sed -i 's/-msse2\?//g; s/-mavx[^ ]*//g; s/-mfma//g; s/-O[0-9]/-Os/g' kaldi.mk
-sed -i "s|^CXXFLAGS = |CXXFLAGS = $ARCH |" kaldi.mk
+  --openblas-root="$B/openblas-install" --fst-root="$B/openfst-install"
+sed -i 's/-msse2\?//g; s/-mavx[^ ]*//g; s/-mfma//g; s/-O[0-9]/-Os/g; s/ -g / /g' kaldi.mk
+sed -i "s|^CXXFLAGS = |CXXFLAGS = $ARCH -ffunction-sections -fdata-sections |" kaldi.mk
 MODS="online2 decoder ivector gmm tree feat lat lm rnnlm nnet3 matrix fstext util base hmm cudamatrix transform"
 nice -n 19 make -j"$JOBS" $MODS
 
-# флаги компиляции Kaldi для файлов Vosk
 printf 'include kaldi.mk\nprint:\n\t@echo $(CXXFLAGS)\n' > "$B/pf.mk"
 KFLAGS="$(make -s -f "$B/pf.mk" print)"
 
-# --- Vosk
 cd "$B/vosk-api/src"
-for f in recognizer language_model model spk_model vosk_api postprocessor; do
+for f in recognizer language_model model spk_model vosk_api; do
   [ -f "$f.cc" ] || continue
-  $CXX -std=c++17 -fPIC $KFLAGS -DFST_NO_DYNAMIC_LINKING -I. -I"$B/kaldi/src" -c "$f.cc" -o "$f.o"
+  $CXX -std=c++17 -fPIC $KFLAGS -DFST_NO_DYNAMIC_LINKING -I. -c "$f.cc" -o "$f.o"
 done
-$AR rcs libvosk_base.a recognizer.o model.o vosk_api.o postprocessor.o $( [ -f language_model.o ] && echo language_model.o ) $( [ -f spk_model.o ] && echo spk_model.o )
+$AR rcs libvosk_base.a recognizer.o model.o vosk_api.o $( [ -f language_model.o ] && echo language_model.o ) $( [ -f spk_model.o ] && echo spk_model.o )
 
 {
   echo "create $B/libvosk_fat.a"
@@ -93,7 +81,6 @@ cp "$B/libvosk_fat.a" "$ROOT/Folclient/vendor/lib/"
 cp "$B/libvosk_fat.a" "$ROOT/out/"
 cp "$B/vosk-api/src/vosk_api.h" "$ROOT/Folclient/vendor/lib/"
 
-# --- libasound.a (статическая, конфиги читаются из /usr/share/alsa на устройстве)
 cd "$B"
 wget -q https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.10.tar.bz2 -O alsa-lib.tar.bz2
 tar -xjf alsa-lib.tar.bz2
@@ -104,7 +91,6 @@ make -j"$JOBS"
 make DESTDIR="$B/alsa-root" install
 cp "$B/alsa-root/usr/lib/libasound.a" "$ROOT/Folclient/vendor/lib/"
 
-# --- клиент
 EXTRA="$($CXX -print-file-name=libstdc++.a),$($FC -print-file-name=libgfortran.a),$($CC -print-libgcc-file-name),$($CC -print-file-name=libgcc_eh.a)"
 cd "$ROOT/Folclient"
 "$ZIG" build -Doptimize=ReleaseSmall \
@@ -113,4 +99,13 @@ cd "$ROOT/Folclient"
   -Dinclude="$B/alsa-root/usr/include" \
   -Dextra-libs="$EXTRA"
 cp zig-out/bin/folclient "$ROOT/out/folclient-armhf"
+$STRIP --strip-all "$ROOT/out/folclient-armhf"
 file "$ROOT/out/folclient-armhf" || true
+
+cd "$ROOT/Folserver"
+"$ZIG" build -Doptimize=ReleaseSmall \
+  -Dtarget=$T.2.30 \
+  -Dlibs="$ROOT/Folserver/vendor/lib" \
+  -Dinclude="$ROOT/Folserver/vendor/include"
+cp zig-out/bin/folserver "$ROOT/out/folserver-armhf"
+file "$ROOT/out/folserver-armhf" || true

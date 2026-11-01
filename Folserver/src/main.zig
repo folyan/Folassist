@@ -67,7 +67,7 @@ const Session = struct {
 fn sendReplyRaw(fd: c_int, rate: u32, pcm: []const u8, flags: u8) !void {
     var rate_b: [4]u8 = undefined;
     std.mem.writeInt(u32, &rate_b, rate, .little);
-    try net.sendFrameF(alloc, fd, .reply, flags, &.{ &rate_b, pcm });
+    try net.sendFrameF(fd, .reply, flags, &.{ &rate_b, pcm });
 }
 
 fn speakF(fd: c_int, text: []const u8, flags: u8) !void {
@@ -155,22 +155,22 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
         defer path.deinit(alloc);
         try path.appendSlice(alloc, "/yt?q=");
         try urlEncode(&path, q);
-        try net.sendFrame(alloc, fd, .play, &.{path.items});
+        try net.sendFrame(fd, .play, &.{path.items});
         return speak(fd, "Включаю.");
     }
 
     if (op == .ai) {
-        if (text.len == 0) return net.sendFrame(alloc, fd, .reply, &.{});
+        if (text.len == 0) return net.sendFrame(fd, .reply, &.{});
         var sc: StreamCtx = .{ .fd = fd };
         const sink = ai.Sink{ .ctx = &sc, .emit = emitSentence };
         const cp: ?[]const u8 = if (s.prompt) |p| p else null;
         if (ai.askStream(alloc, s.id, text, cp, sink)) |full| {
             alloc.free(full);
-            try net.sendFrame(alloc, fd, .reply, &.{});
+            try net.sendFrame(fd, .reply, &.{});
         } else |e| {
             log("ИИ: {s}", .{@errorName(e)});
             if (sc.sent) {
-                try net.sendFrame(alloc, fd, .reply, &.{});
+                try net.sendFrame(fd, .reply, &.{});
             } else {
                 try speak(fd, "Не удалось получить ответ.");
             }
@@ -205,7 +205,7 @@ fn sendCache(fd: c_int) !void {
         try out.appendSlice(alloc, e.text);
         try out.appendSlice(alloc, e.pcm);
     }
-    try net.sendFrame(alloc, fd, .cache, &.{out.items});
+    try net.sendFrame(fd, .cache, &.{out.items});
 }
 
 fn handleConn(fd: c_int) !void {
@@ -220,7 +220,7 @@ fn handleConn(fd: c_int) !void {
                 if (op == .model_req) {
                     const p = model_archive orelse {
                         log("клиент просит модель, но --model-archive не задан", .{});
-                        try net.sendFrame(alloc, fd, .model, &.{});
+                        try net.sendFrame(fd, .model, &.{});
                         continue;
                     };
                     log("клиент просит модель (00), отдаю {s}", .{p});
@@ -232,7 +232,7 @@ fn handleConn(fd: c_int) !void {
                 }
                 handleCmd(fd, &s, op, f.payload) catch |e| {
                     log("[{d}] ошибка обработки: {s}", .{ s.id, @errorName(e) });
-                    try net.sendFrame(alloc, fd, .reply, &.{});
+                    try net.sendFrame(fd, .reply, &.{});
                 };
             },
             .prompt => {
@@ -359,7 +359,10 @@ fn httpAcceptLoop(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
     const lfd: c_int = @intCast(@intFromPtr(arg));
     while (true) {
         const cfd = c.accept(lfd, null, null);
-        if (cfd < 0) continue;
+        if (cfd < 0) {
+            _ = c.usleep(10_000);
+            continue;
+        }
         spawn(cfd, httpThread);
     }
 }
@@ -397,6 +400,18 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    const cfg_path = try std.fmt.allocPrint(alloc, "{s}.json", .{voice_path});
+    const cfg_data = zfmt.readFile(c, alloc, cfg_path) catch &[_]u8{};
+    if (cfg_data.len == 0) {
+        log("нет или пустой конфиг голоса: {s}", .{cfg_path});
+        return error.VoiceConfigMissing;
+    }
+    const onnx_z = try alloc.dupeSentinel(u8, voice_path, 0);
+    const onnx_f = c.fopen(@ptrCast(onnx_z.ptr), @ptrCast("rb")) orelse {
+        log("нет файла голоса: {s}", .{voice_path});
+        return error.VoiceModelMissing;
+    };
+    _ = c.fclose(onnx_f);
     tts = try tts_mod.Tts.init(alloc, voice_path, espeak_path);
 
     var phrases: std.ArrayList([]const u8) = .empty;
@@ -420,7 +435,10 @@ pub fn main(init: std.process.Init) !void {
 
     while (true) {
         const cfd = c.accept(lfd, null, null);
-        if (cfd < 0) continue;
+        if (cfd < 0) {
+            _ = c.usleep(10_000);
+            continue;
+        }
         spawn(cfd, connThread);
     }
 }

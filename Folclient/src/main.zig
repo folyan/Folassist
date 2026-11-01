@@ -10,6 +10,7 @@ const alloc = std.heap.c_allocator;
 const RATE = 16000;
 const FRAME = 4000;
 const FPS = 4;
+const GATE_HOLD_FRAMES = 10;
 
 const SHM_ARCHIVE = "/dev/shm/model.tar.gz";
 
@@ -31,6 +32,8 @@ const Config = struct {
     ringtone: ?[]const u8 = null,
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
+    gate: u32 = 0,
+    level: bool = false,
 };
 
 var cfg: Config = .{};
@@ -79,6 +82,39 @@ var pending_play: ?[]u8 = null;
 fn log(comptime fmt: []const u8, args: anytype) void {
     if (!cfg.verbose) return;
     std.debug.print("[folclient] " ++ fmt ++ "\n", args);
+}
+
+const USAGE =
+    \\folclient [опции]
+    \\  --server=IP[:порт]   сервер, по умолчанию 127.0.0.1:9000
+    \\  --http-port=N        порт HTTP-релея сервера, по умолчанию 9001
+    \\  --id=N               номер клиента 0-255, по умолчанию 1
+    \\  --model=ПУТЬ         папка модели Vosk, по умолчанию /dev/shm/vosk
+    \\  --wake=СЛОВО         слово активации, можно несколько, по умолчанию дот и тот
+    \\  --stop=СЛОВО         слово остановки, можно несколько, по умолчанию стоп и хватит
+    \\  --wake-sound=ФАЙЛ    звук после активации
+    \\  --ringtone=ФАЙЛ      мелодия будильника, играет по кругу до остановки
+    \\  --remind-sound=ФАЙЛ  звук перед напоминанием
+    \\  --store=ФАЙЛ         файл будильников и напоминаний
+    \\  --prompt=ФАЙЛ        дополнительный промпт для ИИ
+    \\  --city=ТЕКСТ         город для погоды, по умолчанию Омске
+    \\  --lat=N --lon=N      координаты для погоды
+    \\  --wait=СЕК           ожидание команды после слова активации, по умолчанию 5
+    \\  --collect=СЕК        сбор фраз в одну команду, по умолчанию 3
+    \\  --dialog=СЕК         окно диалога с ИИ без слова активации, по умолчанию 10
+    \\  --gate=N             не распознавать тишину ниже уровня N, по умолчанию 0 (выкл)
+    \\  --level              печатать уровень звука, чтобы подобрать --gate
+    \\  --verbose            подробный лог
+    \\  --help               эта справка
+;
+
+fn frameRms(buf: *const [FRAME]i16) u32 {
+    var sum: u64 = 0;
+    for (buf) |s| {
+        const v: i32 = s;
+        sum += @intCast(v * v);
+    }
+    return std.math.sqrt(sum / FRAME);
 }
 
 fn val(arg: []const u8, comptime key: []const u8) ?[]const u8 {
@@ -294,8 +330,8 @@ fn connectServer() !c_int {
     var hb: [128]u8 = undefined;
     hb[0] = cfg.id;
     const info = try std.fmt.bufPrint(hb[1..], "{d:.4};{d:.4};{s}", .{ cfg.lat, cfg.lon, cfg.city });
-    try net.sendFrame(alloc, fd, .hello, &.{hb[0 .. 1 + info.len]});
-    if (client_prompt) |p| try net.sendFrame(alloc, fd, .prompt, &.{p});
+    try net.sendFrame(fd, .hello, &.{hb[0 .. 1 + info.len]});
+    if (client_prompt) |p| try net.sendFrame(fd, .prompt, &.{p});
 
     const f = try net.recvFrame(alloc, fd);
     defer f.deinit(alloc);
@@ -313,7 +349,7 @@ fn fetchModel() !void {
     const fd = try dial();
     defer _ = c.close(fd);
 
-    try net.sendFrameF(alloc, fd, .cmd, @intFromEnum(protocol.Op.model_req), &.{});
+    try net.sendFrameF(fd, .cmd, @intFromEnum(protocol.Op.model_req), &.{});
     const h = try net.recvHeader(fd);
     if (h.msg_type != .model or h.len == 0) return error.ModelUnavailable;
 
@@ -330,7 +366,7 @@ fn askServer(op: protocol.Op, text: []const u8, played: *bool) !void {
     if (sock < 0) sock = try connectServer();
     errdefer closeSock();
     defer speaker.close();
-    try net.sendFrameF(alloc, sock, .cmd, @intFromEnum(op), &.{text});
+    try net.sendFrameF(sock, .cmd, @intFromEnum(op), &.{text});
     while (true) {
         const f = try net.recvFrame(alloc, sock);
         switch (f.msg_type) {
@@ -415,6 +451,7 @@ fn opFor(cmd: []const u8) protocol.Op {
 }
 
 var dialog_frames: u32 = 0;
+var gate_hold: u32 = 0;
 
 fn playFile(path: ?[]const u8) void {
     const p = path orelse return;
@@ -515,6 +552,13 @@ pub fn main(init: std.process.Init) !void {
             cfg.collect_sec = std.fmt.parseInt(u32, v, 10) catch cfg.collect_sec;
         } else if (val(arg, "--prompt")) |v| {
             cfg.prompt_path = v;
+        } else if (std.mem.eql(u8, arg, "--help")) {
+            std.debug.print("{s}\n", .{USAGE});
+            return;
+        } else if (std.mem.eql(u8, arg, "--level")) {
+            cfg.level = true;
+        } else if (val(arg, "--gate")) |v| {
+            cfg.gate = std.fmt.parseInt(u32, v, 10) catch 0;
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             cfg.verbose = true;
         } else if (val(arg, "--ringtone")) |v| {
@@ -559,14 +603,28 @@ pub fn main(init: std.process.Init) !void {
         try readFrame(mic, &buf);
         if (armed > 0) armed -= 1;
         if (dialog_frames > 0) dialog_frames -= 1;
-        try utt.appendSlice(alloc, std.mem.sliceAsBytes(buf[0..]));
-        if (utt.items.len > MAX_UTT_BYTES) utt.clearRetainingCapacity();
+        if (pending_reminder != null) {
+            try utt.appendSlice(alloc, std.mem.sliceAsBytes(buf[0..]));
+            if (utt.items.len > MAX_UTT_BYTES) utt.clearRetainingCapacity();
+        }
 
         if (events.popDue(events.now())) |ev| fire(ev, mic);
 
         if (collect_frames > 0) {
             collect_frames -= 1;
             if (collect_frames == 0 and acc.items.len > 0) dispatchBatch(rec, mic);
+        }
+
+        if (cfg.gate > 0 or cfg.level) {
+            const rms = frameRms(&buf);
+            if (cfg.level) log("уровень: {d}", .{rms});
+            if (rms >= cfg.gate) {
+                gate_hold = GATE_HOLD_FRAMES;
+            } else if (gate_hold > 0) {
+                gate_hold -= 1;
+            } else if (cfg.gate > 0 and pending_reminder == null) {
+                continue;
+            }
         }
 
         const got = try feedVosk(rec, &buf);
@@ -577,12 +635,11 @@ pub fn main(init: std.process.Init) !void {
             if (text.len == 0) continue;
             pending_reminder = null;
             events.addReminder(at, utt.items);
-            utt.clearRetainingCapacity();
+            utt.clearAndFree(alloc);
             log("сообщение для напоминания сохранено", .{});
             playWakeSound();
             continue;
         }
-        utt.clearRetainingCapacity();
         if (text.len == 0) continue;
         log("услышал: «{s}»", .{text});
 

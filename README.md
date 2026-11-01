@@ -40,3 +40,8 @@ cd Folclient && zig build -Doptimize=ReleaseSmall
 ./zig-out/bin/folclient --id=1 --server=192.168.1.100:9000 --http-port=9001 \
   --model=/dev/shm/vosk-model-small-ru-0.22 --wake-sound=wake_sound.wav \
   --city=Омске --lat=54.99 --lon=73.37
+
+## Опции
+- `./folclient --help` — все опции клиента.
+- `--gate=N` — не гонять Vosk на тишине (экономит CPU). Подбери N по `--level`, обычно 100–300.
+- Сервер: если `voice/*.onnx.json` пустой или отсутствует — сервер сразу пишет понятную ошибку.
