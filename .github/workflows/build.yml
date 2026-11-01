@@ -15,7 +15,7 @@ jobs:
           key: armhf-${{ hashFiles('scripts/build_armhf.sh', 'scripts/shim_dotsub.c') }}
       - name: build armhf
         run: |
-          docker run --rm -v "$PWD:/w" -w /w ubuntu:20.04 bash -c "apt-get update -qq && apt-get install -y -qq git curl xz-utils make autoconf automake libtool pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf gfortran-arm-linux-gnueabihf file binutils wget unzip && bash scripts/build_armhf.sh"
+          docker run --rm -e DEBIAN_FRONTEND=noninteractive -e TZ=Etc/UTC -v "$PWD:/w" -w /w ubuntu:20.04 bash -c "apt-get update -qq && apt-get install -y -qq git curl xz-utils make autoconf automake libtool pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf gfortran-arm-linux-gnueabihf file binutils wget unzip && bash scripts/build_armhf.sh"
       - uses: actions/upload-artifact@v4
         with:
           name: armhf
