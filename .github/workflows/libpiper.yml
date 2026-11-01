@@ -1,10 +1,10 @@
-name: libpiper-x86_64
+name: libpiper
 
 on:
   workflow_dispatch:
 
 jobs:
-  libpiper:
+  libpiper-x86_64-glibc:
     runs-on: ubuntu-24.04
     steps:
       - name: install tools
@@ -17,9 +17,77 @@ jobs:
         run: cmake --build build -j"$(nproc)"
       - name: install
         run: cmake --install build
-      - name: list output
-        run: find prefix -maxdepth 3 -name "piper.h" -o -name "libpiper*" -o -name "libonnxruntime*"
       - uses: actions/upload-artifact@v4
         with:
-          name: libpiper-x86_64
+          name: libpiper-x86_64-glibc
+          path: prefix
+
+  libpiper-aarch64-glibc:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake ninja-build git pkg-config
+      - name: clone piper
+        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
+      - name: configure
+        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: install
+        run: cmake --install build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-aarch64-glibc
+          path: prefix
+
+  libpiper-x86_64-musl:
+    runs-on: ubuntu-24.04
+    container: alpine:edge
+    steps:
+      - name: install tools
+        run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
+      - name: check onnxruntime files
+        run: ls /usr/lib | grep -i onnx; ls /usr/include | grep -i onnx
+      - name: prepare onnxruntime dir
+        run: |
+          mkdir -p ort/lib ort/include
+          cp -P /usr/lib/libonnxruntime*.so* ort/lib/
+          cp -r /usr/include/onnxruntime/* ort/include/ 2>/dev/null || true
+      - name: clone piper
+        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
+      - name: configure
+        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix" -DONNXRUNTIME_DIR="$PWD/ort"
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: install
+        run: cmake --install build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-x86_64-musl
+          path: prefix
+
+  libpiper-aarch64-musl:
+    runs-on: ubuntu-24.04-arm
+    container: alpine:edge
+    steps:
+      - name: install tools
+        run: apk add --no-cache bash build-base cmake ninja git pkgconf onnxruntime
+      - name: check onnxruntime files
+        run: ls /usr/lib | grep -i onnx; ls /usr/include | grep -i onnx
+      - name: prepare onnxruntime dir
+        run: |
+          mkdir -p ort/lib ort/include
+          cp -P /usr/lib/libonnxruntime*.so* ort/lib/
+          cp -r /usr/include/onnxruntime/* ort/include/ 2>/dev/null || true
+      - name: clone piper
+        run: git clone --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper
+      - name: configure
+        run: cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix" -DONNXRUNTIME_DIR="$PWD/ort"
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: install
+        run: cmake --install build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-aarch64-musl
           path: prefix
