@@ -1,0 +1,68 @@
+const std = @import("std");
+const aro = @import("aro");
+const mem = std.mem;
+const Allocator = mem.Allocator;
+const process = std.process;
+const Codegen = aro.Codegen;
+const Compilation = aro.Compilation;
+const Source = aro.Source;
+const Preprocessor = aro.Preprocessor;
+const Parser = aro.Parser;
+
+var fixed_buffer_mem: [20 * 1024 * 1024]u8 = undefined;
+
+export fn compile_c_buf(buf: [*]const u8, len: c_int) void {
+    compileSlice(buf[0..@intCast(len)]) catch |e| switch (e) {
+        error.FatalError,
+        error.OutOfMemory,
+        => {},
+        else => unreachable,
+    };
+}
+
+fn compileSlice(buf: []const u8) !void {
+    var fixed_allocator = std.heap.FixedBufferAllocator.init(&fixed_buffer_mem);
+    const allocator = fixed_allocator.allocator();
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const aro_dir = try std.process.executablePathAlloc(io, allocator);
+    defer allocator.free(aro_dir);
+
+    var diagnostics: aro.Diagnostics = .{ .output = .ignore };
+
+    // FBA is a valid "arena" because leaks are OK and FBA doesn't tend to reuse memory anyway.
+    var comp = try Compilation.init(.{
+        .gpa = allocator,
+        .arena = allocator,
+        .io = io,
+        .diagnostics = &diagnostics,
+        .environ_map = null,
+    });
+    defer comp.deinit();
+
+    try comp.addDefaultPragmaHandlers();
+    try comp.initSearchPath(&.{.{ .kind = .system, .path = aro_dir }}, false);
+
+    const user_source = try comp.addSourceFromBuffer("<STDIN>", buf);
+    const builtin = try comp.generateBuiltinMacros(.include_system_defines);
+
+    try processSource(&comp, builtin, user_source);
+    _ = comp.sources.swapRemove(user_source.path);
+}
+
+fn processSource(comp: *Compilation, builtin: Source, user_source: Source) !void {
+    var pp = try Preprocessor.init(comp, .{ .base_file = user_source.id });
+    defer pp.deinit();
+    try pp.addBuiltinMacros();
+
+    _ = try pp.preprocess(builtin);
+    const eof = try pp.preprocess(user_source);
+    try pp.addToken(eof);
+
+    var tree = try Parser.parse(&pp);
+    defer tree.deinit();
+
+    var discard_buf: [256]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&discard_buf);
+    try tree.dump(.{ .writer = &discarding.writer, .mode = .no_color });
+}

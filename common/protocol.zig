@@ -1,0 +1,207 @@
+const std = @import("std");
+const builtin = @import("builtin");
+
+pub const MAGIC: u8 = 0xFA;
+pub const VERSION: u8 = @import("version.zig").APP;
+pub const LIBC_MUSL: u8 = 0b0001_0000;
+pub const IS_MUSL: bool = builtin.abi.isMusl();
+pub const HEADER_LEN: usize = 7;
+pub const TYPE_BITS: u3 = 0b111;
+pub const MAX_PAYLOAD: u32 = 16 * 1024 * 1024;
+pub const MAX_MODEL: u32 = 512 * 1024 * 1024;
+pub const REPLY_MORE: u8 = 0b0000_0001;
+pub const CACHE_ID: u8 = 0b0000_0010;
+
+pub const EMOTION_MASK: u8 = 0b0000_0110;
+pub const EMOTION_SHIFT: u3 = 1;
+
+pub const Emotion = enum(u2) {
+    def = 0b00,
+    happy = 0b01,
+    sad = 0b10,
+    what = 0b11,
+};
+
+pub fn getEmotion(flags: u8) Emotion {
+    return @enumFromInt(@as(u2, @truncate((flags & EMOTION_MASK) >> EMOTION_SHIFT)));
+}
+
+pub fn setEmotion(flags: u8, em: Emotion) u8 {
+    return (flags & ~EMOTION_MASK) | (@as(u8, @intFromEnum(em)) << EMOTION_SHIFT);
+}
+
+pub const Op = enum(u2) {
+    model_req = 0b00,
+    weather = 0b01,
+    ai = 0b10,
+    music = 0b11,
+};
+
+pub const MsgType = enum(u8) {
+    hello = 1,
+    cmd = 2,
+    reply = 3,
+    model = 4,
+    play = 5,
+    prompt = 6,
+    cache = 7,
+    update = 0,
+    _,
+};
+
+pub const Header = struct {
+    version: u8,
+    musl: bool,
+    msg_type: MsgType,
+    flags: u8,
+    len: u32,
+};
+
+pub fn encodeHeader(t: MsgType, flags: u8, len: u32) [HEADER_LEN]u8 {
+    var b: [HEADER_LEN]u8 = undefined;
+    b[0] = MAGIC;
+    b[1] = VERSION;
+    const libc: u8 = if (IS_MUSL) LIBC_MUSL else 0;
+    b[2] = (@intFromEnum(t) & TYPE_BITS) | (((flags & 0x0f) | libc) << 3);
+    std.mem.writeInt(u32, b[3..7], len, .little);
+    return b;
+}
+
+pub fn decodeHeader(b: [HEADER_LEN]u8) !Header {
+    if (b[0] != MAGIC) return error.BadMagic;
+    const t: MsgType = @enumFromInt(b[2] & TYPE_BITS);
+    const raw = b[2] >> 3;
+    const flags = raw & 0x0f;
+    const len = std.mem.readInt(u32, b[3..7], .little);
+    const limit: u32 = if (t == .model) MAX_MODEL else MAX_PAYLOAD;
+    if (len > limit) return error.FrameTooLarge;
+    return .{ .version = b[1], .musl = (raw & LIBC_MUSL) != 0, .msg_type = t, .flags = flags, .len = len };
+}
+
+pub fn Net(comptime C: type) type {
+    return struct {
+        pub const Frame = struct {
+            version: u8,
+            musl: bool,
+            msg_type: MsgType,
+            flags: u8,
+            payload: []u8,
+
+            pub fn deinit(self: Frame, alloc: std.mem.Allocator) void {
+                alloc.free(self.payload);
+            }
+        };
+
+        pub fn readAll(fd: c_int, buf: []u8) !void {
+            var got: usize = 0;
+            while (got < buf.len) {
+                const n = C.recv(fd, buf.ptr + got, buf.len - got, 0);
+                if (n == 0) return error.Closed;
+                if (n < 0) {
+                    const e = C.__errno_location().*;
+                    if (e == C.EINTR) continue;
+                    if (e == C.EAGAIN) return error.Timeout;
+                    return error.RecvFailed;
+                }
+                got += @intCast(n);
+            }
+        }
+
+        fn sendAll(fd: c_int, buf: []const u8, more: bool) !void {
+            var flags: c_int = @intCast(C.MSG_NOSIGNAL);
+            if (more) flags |= @as(c_int, @intCast(C.MSG_MORE));
+            var sent: usize = 0;
+            while (sent < buf.len) {
+                const n = C.send(fd, buf.ptr + sent, buf.len - sent, flags);
+                if (n < 0) {
+                    if (C.__errno_location().* == C.EINTR) continue;
+                    return error.SendFailed;
+                }
+                sent += @intCast(n);
+            }
+        }
+
+        pub fn writeAll(fd: c_int, buf: []const u8) !void {
+            return sendAll(fd, buf, false);
+        }
+
+        pub fn sendFrame(fd: c_int, t: MsgType, parts: []const []const u8) !void {
+            return sendFrameF(fd, t, 0, parts);
+        }
+
+        pub fn sendFrameF(fd: c_int, t: MsgType, flags: u8, parts: []const []const u8) !void {
+            var left: usize = 0;
+            for (parts) |p| left += p.len;
+            if (left > MAX_PAYLOAD) return error.FrameTooLarge;
+
+            const hdr = encodeHeader(t, flags, @intCast(left));
+            try sendAll(fd, &hdr, left > 0);
+            for (parts) |p| {
+                if (p.len == 0) continue;
+                left -= p.len;
+                try sendAll(fd, p, left > 0);
+            }
+        }
+
+        pub fn recvHeader(fd: c_int) !Header {
+            var hb: [HEADER_LEN]u8 = undefined;
+            try readAll(fd, &hb);
+            return decodeHeader(hb);
+        }
+
+        pub fn recvFrame(alloc: std.mem.Allocator, fd: c_int) !Frame {
+            const h = try recvHeader(fd);
+            if (h.len > MAX_PAYLOAD) return error.FrameTooLarge;
+            const payload = try alloc.alloc(u8, h.len);
+            errdefer alloc.free(payload);
+            try readAll(fd, payload);
+            return .{ .version = h.version, .musl = h.musl, .msg_type = h.msg_type, .flags = h.flags, .payload = payload };
+        }
+
+        pub fn sendFile(fd: c_int, path: [:0]const u8, t: MsgType) !void {
+            const f = C.open(path.ptr, C.O_RDONLY);
+            if (f < 0) return error.OpenFailed;
+            defer _ = C.close(f);
+
+            const end = C.lseek(f, 0, C.SEEK_END);
+            if (end < 0) return error.StatFailed;
+            if (C.lseek(f, 0, C.SEEK_SET) < 0) return error.StatFailed;
+            const size: u64 = @intCast(end);
+            if (size > MAX_MODEL) return error.FrameTooLarge;
+
+            const hdr = encodeHeader(t, 0, @intCast(size));
+            try sendAll(fd, &hdr, size > 0);
+
+            var chunk: [64 * 1024]u8 = undefined;
+            var left: u64 = size;
+            while (left > 0) {
+                const want: usize = @intCast(@min(left, chunk.len));
+                const n = C.read(f, &chunk, want);
+                if (n <= 0) return error.ReadFailed;
+                const got: usize = @intCast(n);
+                try writeAll(fd, chunk[0..got]);
+                left -= got;
+            }
+        }
+
+        pub fn recvToFile(fd: c_int, len: u32, path: [:0]const u8) !void {
+            const f = C.open(path.ptr, C.O_WRONLY | C.O_CREAT | C.O_TRUNC, @as(c_uint, 0o600));
+            if (f < 0) return error.OpenFailed;
+            defer _ = C.close(f);
+
+            var chunk: [64 * 1024]u8 = undefined;
+            var left: usize = len;
+            while (left > 0) {
+                const want = @min(left, chunk.len);
+                try readAll(fd, chunk[0..want]);
+                var off: usize = 0;
+                while (off < want) {
+                    const n = C.write(f, &chunk[off], want - off);
+                    if (n <= 0) return error.WriteFailed;
+                    off += @intCast(n);
+                }
+                left -= want;
+            }
+        }
+    };
+}

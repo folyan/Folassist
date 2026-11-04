@@ -1,0 +1,181 @@
+#if &x
+#error "failed"
+#endif
+
+#if *x
+#error "failed"
+#endif
+
+#if x &= 1
+#error "failed"
+#endif
+
+#if ~0 && 0
+#error "failed"
+#endif
+
+#if !1
+#error "failed"
+#endif
+
+#if x++
+#error "failed"
+#endif
+
+#if ++x
+#error "failed"
+#endif
+
+#if x + y++
+#error "failed"
+#endif
+
+#if 'c' && 0
+#error "failed"
+#endif
+
+#define FOO BAR
+#if FOO[0]
+#error "failed"
+#endif
+
+#if )
+#error "failed"
+#endif
+
+#if "not allowed"
+#error "failed"
+#endif
+
+#if U"not allowed"
+#endif
+
+#define BAZ --
+#if 0 BAZ
+error "failed"
+#endif
+
+#if BAZ
+error "failed"
+#endif
+
+#if 1 + &x
+#endif
+
+#if 1 < ABC 2
+#endif
+
+#if -9223372036854775808 / -1
+#endif
+
+#if 0 && (1 - 1U)
+#endif
+
+#if -(-9223372036854775807L -1)
+#endif
+
+#if 0 && (1 && (1 / 0))
+#endif
+
+#if (4 >> -2) != 0
+#error bad shr
+#endif
+
+#if (4 >> 250) != 0
+#error bad shr
+#endif
+
+#if (4U >> -2) != 0
+#error bad shr
+#endif
+
+#if (4U >> 250) != 0
+#error bad shr
+#endif
+
+#if (4 << -2) != 0
+#error bad shl
+#endif
+
+#if (4 << 250) != 0
+#error bad shl
+#endif
+
+#if (4U << -2) != 0
+#error bad shl
+#endif
+
+#if (4U << 250) != 0
+#error bad shl
+#endif
+
+#if ((-9223372036854775807 - 1) / -1) != (-9223372036854775807 - 1)
+#error bad div overflow
+#endif
+
+#if ((-9223372036854775807 - 1) % -1) != 0
+#error bad mod overflow
+#endif
+
+#if 0xFFFFFFFFFFFFFFFF != -1
+#error bad big hex int
+#endif
+
+#if defined(FOO foo
+#error bad
+#endif
+
+#if (1 foo
+#error bad
+#endif
+
+// Usual arithmetic conversion means the result of the ternary expression is converted to unsigned
+#if (0 ? 0u : -1) != 18446744073709551615ULL
+#error bad
+#endif
+
+// Usual arithmetic conversion stemming from the 0u in the inner ternary expression
+// propagates all the way out to the final lhs of != and therefore turns the rhs of
+// the != to unsigned as well
+#if (0 ? (0 ? 0u : 1) : -1) != -1
+#error bad
+#endif
+
+/** manifest:
+syntax
+
+preprocessor binary operators.c:1:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:5:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:9:7: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:21:6: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:25:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:29:10: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:38:8: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:42:5: error: expected value in expression
+preprocessor binary operators.c:46:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:50:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:54:7: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:53:13: note: expanded from here
+preprocessor binary operators.c:58:5: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:53:13: note: expanded from here
+preprocessor binary operators.c:62:9: error: invalid token at start of a preprocessor expression
+preprocessor binary operators.c:65:13: error: token is not a valid binary operator in a preprocessor subexpression
+preprocessor binary operators.c:68:6: warning: integer literal is too large to be represented in a signed integer type, interpreting as unsigned [-Wimplicitly-unsigned-literal]
+preprocessor binary operators.c:68:26: warning: right side of operator converted from negative value to unsigned: -1 to 18446744073709551615
+preprocessor binary operators.c:74:5: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:80:8: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:84:8: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:88:9: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:92:9: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:96:8: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:100:8: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:104:9: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:108:9: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:112:33: warning: integer overflow in preprocessor expression
+preprocessor binary operators.c:120:24: warning: right side of operator converted from negative value to unsigned: -1 to 18446744073709551615
+preprocessor binary operators.c:124:17: error: expected closing ')'
+preprocessor binary operators.c:124:12: note: to match this '('
+preprocessor binary operators.c:128:8: error: expected closing ')'
+preprocessor binary operators.c:128:5: note: to match this '('
+preprocessor binary operators.c:140:29: warning: right side of operator converted from negative value to unsigned: -1 to 18446744073709551615
+*/

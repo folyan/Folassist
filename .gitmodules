@@ -1,0 +1,3 @@
+[submodule "Folclient/vendor/arocc"]
+	path = Folclient/vendor/arocc
+	url = https://github.com/Vexu/arocc.git

@@ -1,0 +1,340 @@
+name: build
+'on':
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: write
+env:
+  PIPER_REF: ${{ vars.PIPER_REF || 'main' }}
+  ZIG_VERSION: 0.17.0
+
+jobs:
+  client-armhf-glibc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: build
+          key: armhf-glibc-sherpa-${{ hashFiles('scripts/build_armhf.sh') }}
+      - name: build in ubuntu 22.04
+        run: docker run --rm -e DEBIAN_FRONTEND=noninteractive -e TZ=Etc/UTC -v "$GITHUB_WORKSPACE:/w" -w /w ubuntu:22.04 bash scripts/build_armhf.sh
+      - uses: actions/cache/save@v4
+        if: github.ref_type != 'tag' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folclient-armhf-glibc
+          path: |
+            out/folclient-armhf
+            out/folwatchdog-armhf
+            out/size-report-folclient-armhf.txt
+            out/libsherpa_fat.a
+
+  client-aarch64-glibc:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: build
+          key: aarch64-glibc-sherpa-${{ hashFiles('scripts/build_aarch64.sh') }}
+      - name: build in ubuntu 22.04
+        run: docker run --rm -e DEBIAN_FRONTEND=noninteractive -e TZ=Etc/UTC -v "$GITHUB_WORKSPACE:/w" -w /w ubuntu:22.04 bash scripts/build_aarch64.sh
+      - uses: actions/cache/save@v4
+        if: github.ref_type != 'tag' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folclient-aarch64-glibc
+          path: |
+            out/folclient-aarch64-glibc
+            out/folwatchdog-aarch64-glibc
+            out/size-report-folclient-aarch64-glibc.txt
+            out/libsherpa_fat.a
+
+  client-aarch64-musl:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: build
+          key: aarch64-musl-sherpa-${{ hashFiles('scripts/build_aarch64.sh') }}
+      - name: build in alpine
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/w" -w /w alpine:3.20 sh scripts/build_aarch64.sh
+      - uses: actions/cache/save@v4
+        if: github.ref_type != 'tag' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folclient-aarch64-musl
+          path: |
+            out/folclient-aarch64-musl
+            out/folwatchdog-aarch64-musl
+            out/size-report-folclient-aarch64-musl.txt
+            out/libsherpa_fat.a
+
+  libpiper-x86_64-glibc:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: build libpiper in ubuntu 22.04
+        run: |
+          docker run --rm -e DEBIAN_FRONTEND=noninteractive -e PIPER_REF -v "$PWD:/w" -w /w ubuntu:22.04 bash -eux -c '
+            apt-get update -qq
+            apt-get install -y -qq ca-certificates git build-essential pkg-config python3-pip
+            pip3 install -q cmake ninja
+            git clone https://github.com/OHF-voice/piper1-gpl.git piper
+            git -C piper checkout "$PIPER_REF"
+            cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/w/prefix
+            cmake --build build -j"$(nproc)"
+            cmake --install build
+            tar -czf libpiper-x86_64-glibc.tar.gz -C prefix .
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-x86_64-glibc
+          path: libpiper-x86_64-glibc.tar.gz
+          retention-days: 1
+
+  libpiper-aarch64-glibc:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: build libpiper in ubuntu 22.04
+        run: |
+          docker run --rm -e DEBIAN_FRONTEND=noninteractive -e PIPER_REF -v "$PWD:/w" -w /w ubuntu:22.04 bash -eux -c '
+            apt-get update -qq
+            apt-get install -y -qq ca-certificates git build-essential pkg-config python3-pip
+            pip3 install -q cmake ninja
+            git clone https://github.com/OHF-voice/piper1-gpl.git piper
+            git -C piper checkout "$PIPER_REF"
+            cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/w/prefix
+            cmake --build build -j"$(nproc)"
+            cmake --install build
+            tar -czf libpiper-aarch64-glibc.tar.gz -C prefix .
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-aarch64-glibc
+          path: libpiper-aarch64-glibc.tar.gz
+          retention-days: 1
+
+  libpiper-x86_64-musl:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: build libpiper in alpine
+        run: docker run --rm -e PIPER_REF -v "$PWD:/w" -w /w alpine:edge sh scripts/libpiper_musl.sh
+      - name: pack prefix
+        run: tar -czf libpiper-x86_64-musl.tar.gz -C prefix .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-x86_64-musl
+          path: libpiper-x86_64-musl.tar.gz
+          retention-days: 1
+
+  libpiper-aarch64-musl:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: build libpiper in alpine
+        run: docker run --rm -e PIPER_REF -v "$PWD:/w" -w /w alpine:edge sh scripts/libpiper_musl.sh
+      - name: pack prefix
+        run: tar -czf libpiper-aarch64-musl.tar.gz -C prefix .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpiper-aarch64-musl
+          path: libpiper-aarch64-musl.tar.gz
+          retention-days: 1
+
+  server-x86_64-glibc:
+    needs: libpiper-x86_64-glibc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-x86_64-glibc
+          path: dist
+      - name: unpack libpiper
+        run: mkdir -p piper && tar -xzf dist/libpiper-x86_64-glibc.tar.gz -C piper
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: build folserver
+        working-directory: Folserver
+        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-gnu.2.31 -Dlibs="$GITHUB_WORKSPACE/piper/lib" -Dinclude="$GITHUB_WORKSPACE/piper/include"
+      - name: pack
+        run: |
+          P=folserver-x86_64-glibc
+          mkdir -p "$P"
+          cp Folserver/zig-out/bin/folserver "$P/"
+          cp -P piper/lib/*.so* "$P/"
+          cp -r piper/share/espeak-ng-data "$P/"
+          printf '#!/bin/sh\nD="$(cd "$(dirname "$0")" && pwd)"\nLD_LIBRARY_PATH="$D" exec "$D/folserver" --espeak="$D/espeak-ng-data" "$@"\n' > "$P/run.sh"
+          chmod +x "$P/run.sh"
+          tar -czf "$P.tar.gz" "$P"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-x86_64-glibc
+          path: folserver-x86_64-glibc.tar.gz
+
+  server-aarch64-glibc:
+    needs: libpiper-aarch64-glibc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-aarch64-glibc
+          path: dist
+      - name: unpack libpiper
+        run: mkdir -p piper && tar -xzf dist/libpiper-aarch64-glibc.tar.gz -C piper
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: build folserver
+        working-directory: Folserver
+        run: zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-gnu.2.31 -Dlibs="$GITHUB_WORKSPACE/piper/lib" -Dinclude="$GITHUB_WORKSPACE/piper/include"
+      - name: pack
+        run: |
+          P=folserver-aarch64-glibc
+          mkdir -p "$P"
+          cp Folserver/zig-out/bin/folserver "$P/"
+          cp -P piper/lib/*.so* "$P/"
+          cp -r piper/share/espeak-ng-data "$P/"
+          printf '#!/bin/sh\nD="$(cd "$(dirname "$0")" && pwd)"\nLD_LIBRARY_PATH="$D" exec "$D/folserver" --espeak="$D/espeak-ng-data" "$@"\n' > "$P/run.sh"
+          chmod +x "$P/run.sh"
+          tar -czf "$P.tar.gz" "$P"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-aarch64-glibc
+          path: folserver-aarch64-glibc.tar.gz
+
+  server-x86_64-musl:
+    needs: libpiper-x86_64-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-x86_64-musl
+          path: dist
+      - name: unpack libpiper
+        run: mkdir -p piper && tar -xzf dist/libpiper-x86_64-musl.tar.gz -C piper
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: build folserver
+        working-directory: Folserver
+        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dlibs="$GITHUB_WORKSPACE/piper/lib" -Dinclude="$GITHUB_WORKSPACE/piper/include"
+      - name: pack
+        run: |
+          P=folserver-x86_64-musl
+          mkdir -p "$P"
+          cp Folserver/zig-out/bin/folserver "$P/"
+          cp -P piper/lib/*.so* "$P/"
+          cp -r piper/share/espeak-ng-data "$P/"
+          printf '#!/bin/sh\nD="$(cd "$(dirname "$0")" && pwd)"\nLD_LIBRARY_PATH="$D" exec "$D/folserver" --espeak="$D/espeak-ng-data" "$@"\n' > "$P/run.sh"
+          chmod +x "$P/run.sh"
+          tar -czf "$P.tar.gz" "$P"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-x86_64-musl
+          path: folserver-x86_64-musl.tar.gz
+
+  server-aarch64-musl:
+    needs: libpiper-aarch64-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpiper-aarch64-musl
+          path: dist
+      - name: unpack libpiper
+        run: mkdir -p piper && tar -xzf dist/libpiper-aarch64-musl.tar.gz -C piper
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: build folserver
+        working-directory: Folserver
+        run: zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl -Dlibs="$GITHUB_WORKSPACE/piper/lib" -Dinclude="$GITHUB_WORKSPACE/piper/include"
+      - name: pack
+        run: |
+          P=folserver-aarch64-musl
+          mkdir -p "$P"
+          cp Folserver/zig-out/bin/folserver "$P/"
+          cp -P piper/lib/*.so* "$P/"
+          cp -r piper/share/espeak-ng-data "$P/"
+          printf '#!/bin/sh\nD="$(cd "$(dirname "$0")" && pwd)"\nLD_LIBRARY_PATH="$D" exec "$D/folserver" --espeak="$D/espeak-ng-data" "$@"\n' > "$P/run.sh"
+          chmod +x "$P/run.sh"
+          tar -czf "$P.tar.gz" "$P"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folserver-aarch64-musl
+          path: folserver-aarch64-musl.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - client-armhf-glibc
+      - client-aarch64-glibc
+      - client-aarch64-musl
+      - server-x86_64-glibc
+      - server-aarch64-glibc
+      - server-x86_64-musl
+      - server-aarch64-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
+        run: |
+          find dist -type f
+          FILES=$(find dist -type f \( -name "folclient-*" -o -name "folwatchdog-*" -o -name "folserver-*.tar.gz" \))
+          (cd dist && find . -type f \( -name "folclient-*" -o -name "folwatchdog-*" -o -name "folserver-*.tar.gz" \) -exec sha256sum {} + | sed "s| \./.*/| |" > sha256sums.txt)
+          printf '%s\n' "$ED25519_PRIVATE_KEY" > priv.pem
+          openssl pkeyutl -sign -inkey priv.pem -rawin -in dist/sha256sums.txt -out dist/sha256sums.txt.sig
+          rm -f priv.pem
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes || true
+          gh release upload "$GITHUB_REF_NAME" $FILES dist/sha256sums.txt dist/sha256sums.txt.sig --repo "$GITHUB_REPOSITORY" --clobber
+
+  cleanup:
+    if: always()
+    needs:
+      - client-armhf-glibc
+      - client-aarch64-glibc
+      - client-aarch64-musl
+      - server-x86_64-glibc
+      - server-aarch64-glibc
+      - server-x86_64-musl
+      - server-aarch64-musl
+      - release
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: delete tag caches and stale main caches
+        run: |
+          gh cache list -R "$GITHUB_REPOSITORY" -L 100 --json id,ref --jq '.[] | select(.ref | startswith("refs/tags/")) | .id' | xargs -r -n1 gh cache delete -R "$GITHUB_REPOSITORY"
+          gh cache list -R "$GITHUB_REPOSITORY" -L 100 --json id,key,ref,createdAt --jq 'map(select(.ref == "refs/heads/main")) | group_by(.key | split("-")[0]) | .[] | sort_by(.createdAt) | reverse | .[1:] | .[] | .id' | xargs -r -n1 gh cache delete -R "$GITHUB_REPOSITORY"
