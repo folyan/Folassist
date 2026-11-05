@@ -965,7 +965,7 @@ pub fn main(init: std.process.Init) !void {
         }
         if (armed == 0 and dialog_frames == 0 and pending_reminder == null) {
             const rms = frameRms(&buf);
-            if (rms < 550) {
+            if (rms < 400) {
                 _ = c.usleep(20_000);
             }
         }
