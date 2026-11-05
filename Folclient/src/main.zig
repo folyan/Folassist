@@ -36,16 +36,16 @@ const Config = struct {
     lat: f64 = 54.99,
     lon: f64 = 73.37,
     wait_sec: u32 = 5,
-    collect_sec: u32 = 3,
-    dialog_sec: u32 = 10,
+    collect_sec: u32 = 1,
+    dialog_sec: u32 = 0,
     prompt_path: ?[]const u8 = null,
     verbose: bool = false,
     ringtone: ?[]const u8 = null,
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
-    gate: u32 = 550,
-    gain: f32 = 3.0,
-    cmd_sim: u32 = 80,
+    gate: u32 = 250,
+    gain: f32 = 4.0,
+    cmd_sim: u32 = 55,
     level: bool = false,
 };
 
@@ -152,7 +152,7 @@ fn val(arg: []const u8, comptime key: []const u8) ?[]const u8 {
 
 fn openCapture() !*c.FILE {
     var b: [256]u8 = undefined;
-    const cmd = zfmt.bufPrintZ(&b, "arecord -q -D {s} -c 1 -f S16_LE -r {d} -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
+    const cmd = zfmt.bufPrintZ(&b, "arecord -q --buffer-time=500000 -D {s} -c 1 -f S16_LE -r {d} -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
     return c.popen(cmd.ptr, "r") orelse error.AudioDeviceError;
 }
 
@@ -906,7 +906,7 @@ pub fn main(init: std.process.Init) !void {
     sonnx_cfg.model_config.transducer.encoder = enc_p.ptr;
     sonnx_cfg.model_config.transducer.decoder = dec_p.ptr;
     sonnx_cfg.model_config.transducer.joiner = join_p.ptr;
-    sonnx_cfg.model_config.num_threads = 1;
+    sonnx_cfg.model_config.num_threads = 3;
     sonnx_cfg.model_config.provider = "cpu";
     sonnx_cfg.decoding_method = "greedy_search";
     sonnx_cfg.max_active_paths = 4;
@@ -979,12 +979,6 @@ pub fn main(init: std.process.Init) !void {
         if (mic_muted) {
             _ = c.usleep(50_000);
             continue;
-        }
-        if (armed == 0 and dialog_frames == 0 and pending_reminder == null) {
-            const rms = frameRms(&buf);
-            if (rms < 300) {
-                _ = c.usleep(20_000);
-            }
         }
         if (armed > 0) armed -= 1;
         if (dialog_frames > 0) dialog_frames -= 1;
