@@ -44,6 +44,7 @@ const Config = struct {
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
     gate: u32 = 550,
+    gain: f32 = 3.0,
     level: bool = false,
 };
 
@@ -128,6 +129,7 @@ const USAGE =
     \\  --dialog=СЕК         окно диалога с ИИ без слова активации, по умолчанию 10
     \\  --gate=N             не распознавать тишину ниже уровня N, по умолчанию 550, 0 выключает
     \\  --level              печатать уровень звука, чтобы подобрать --gate
+    \\  --gain=N             усиление перед распознаванием, по умолчанию 3
     \\  --verbose            подробный лог
     \\  --help               эта справка
 ;
@@ -572,7 +574,7 @@ fn feedSherpa(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.SherpaO
     var fbuf: [FRAME]f32 = undefined;
     for (buf, 0..) |s, i| {
         // Усиление x40.0 с мягким ограничением tanh (убирает тишину и защищает от хрипов)
-        const raw = (@as(f32, @floatFromInt(s)) / 32768.0) * 3.0;
+        const raw = (@as(f32, @floatFromInt(s)) / 32768.0) * cfg.gain;
         fbuf[i] = std.math.tanh(raw);
     }
     c.SherpaOnnxOnlineStreamAcceptWaveform(stream, @intCast(RATE), @ptrCast(&fbuf), @intCast(FRAME));
@@ -818,6 +820,8 @@ pub fn main(init: std.process.Init) !void {
             return;
         } else if (std.mem.eql(u8, arg, "--level")) {
             cfg.level = true;
+        } else if (val(arg, "--gain")) |v| {
+            cfg.gain = std.fmt.parseFloat(f32, v) catch 3.0;
         } else if (val(arg, "--gate")) |v| {
             cfg.gate = std.fmt.parseInt(u32, v, 10) catch 0;
         } else if (std.mem.eql(u8, arg, "--verbose")) {
@@ -852,6 +856,7 @@ pub fn main(init: std.process.Init) !void {
         addWake("фукус");
         addWake("вокус");
         addWake("фокуш");
+        addWake("куш");
     }
     {
         const file_txt: []const u8 = if (cfg.prompt_path) |p| try zfmt.readFile(c, alloc, p) else &.{};
