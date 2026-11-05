@@ -271,8 +271,8 @@ pub const Display = struct {
                     mask |= ledBit(9) | ledBit(11) | ledBit(13);
                 },
                 .sad => {
-                    mask |= ledBit(29) | ledBit(22) | ledBit(18);
-                    mask |= ledBit(9) | ledBit(14) | ledBit(15);
+                    mask |= ledBit(22) | ledBit(18);
+                    mask |= ledBit(14) | ledBit(15);
                 },
                 .what => {
                     mask |= eyeRing(H1) | ledBit(25);
