@@ -45,6 +45,7 @@ const Config = struct {
     store: ?[]const u8 = null,
     gate: u32 = 550,
     gain: f32 = 3.0,
+    cmd_sim: u32 = 80,
     level: bool = false,
 };
 
@@ -130,6 +131,7 @@ const USAGE =
     \\  --gate=N             не распознавать тишину ниже уровня N, по умолчанию 550, 0 выключает
     \\  --level              печатать уровень звука, чтобы подобрать --gate
     \\  --gain=N             усиление перед распознаванием, по умолчанию 3
+    \\  --cmd-sim=N         похожесть слова команды в процентах, по умолчанию 80
     \\  --verbose            подробный лог
     \\  --help               эта справка
 ;
@@ -609,6 +611,14 @@ fn commandAfterWake(text: []const u8) ?[]const u8 {
         if (rest.len > 0 and rest[0] != ' ') continue;
         return std.mem.trim(u8, rest, " ");
     }
+    const sp = std.mem.indexOfScalar(u8, t, ' ') orelse t.len;
+    const first = t[0..sp];
+    if (first.len < 6) return null;
+    for (wake_buf[0..wake_count]) |w| {
+        if (similarity(first, w) >= 70) {
+            return if (sp < t.len) std.mem.trim(u8, t[sp..], " ") else t[t.len..];
+        }
+    }
     return null;
 }
 
@@ -666,10 +676,10 @@ fn opFor(cmd: []const u8) protocol.Op {
     if (std.mem.indexOf(u8, cmd, "погод") != null) return .weather;
     var it = std.mem.tokenizeScalar(u8, cmd, ' ');
     while (it.next()) |word| {
-        if (matchesFuzzy(word, "погода", 60) or matchesFuzzy(word, "погоду", 60) or matchesFuzzy(word, "погодка", 60)) {
+        if (matchesFuzzy(word, "погода", cfg.cmd_sim) or matchesFuzzy(word, "погоду", cfg.cmd_sim) or matchesFuzzy(word, "погодка", cfg.cmd_sim)) {
             return .weather;
         }
-        if (matchesFuzzy(word, "включи", 60) or matchesFuzzy(word, "вруби", 60) or matchesFuzzy(word, "поставь", 60) or matchesFuzzy(word, "сыграй", 60)) {
+        if (matchesFuzzy(word, "включи", cfg.cmd_sim) or matchesFuzzy(word, "вруби", cfg.cmd_sim) or matchesFuzzy(word, "поставь", cfg.cmd_sim) or matchesFuzzy(word, "сыграй", cfg.cmd_sim)) {
             return .music;
         }
     }
@@ -820,6 +830,8 @@ pub fn main(init: std.process.Init) !void {
             return;
         } else if (std.mem.eql(u8, arg, "--level")) {
             cfg.level = true;
+        } else if (val(arg, "--cmd-sim")) |v| {
+            cfg.cmd_sim = std.fmt.parseInt(u32, v, 10) catch 80;
         } else if (val(arg, "--gain")) |v| {
             cfg.gain = std.fmt.parseFloat(f32, v) catch 3.0;
         } else if (val(arg, "--gate")) |v| {
