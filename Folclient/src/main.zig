@@ -572,7 +572,7 @@ fn feedSherpa(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.SherpaO
     var fbuf: [FRAME]f32 = undefined;
     for (buf, 0..) |s, i| {
         // Усиление x40.0 с мягким ограничением tanh (убирает тишину и защищает от хрипов)
-        const raw = (@as(f32, @floatFromInt(s)) / 32768.0) * 40.0;
+        const raw = (@as(f32, @floatFromInt(s)) / 32768.0) * 3.0;
         fbuf[i] = std.math.tanh(raw);
     }
     c.SherpaOnnxOnlineStreamAcceptWaveform(stream, @intCast(RATE), @ptrCast(&fbuf), @intCast(FRAME));
