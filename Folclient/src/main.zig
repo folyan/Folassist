@@ -168,10 +168,12 @@ fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
 
 var last_read_end_ms: i64 = 0;
 
+extern "c" fn clock_gettime(clk: c_int, tp: *[2]i64) c_int;
+
 fn monoMs() i64 {
-    var ts: c.struct_timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK_MONOTONIC, &ts);
-    return @as(i64, ts.tv_sec) * 1000 + @divTrunc(@as(i64, ts.tv_nsec), 1_000_000);
+    var ts: [2]i64 = undefined;
+    _ = clock_gettime(1, &ts);
+    return ts[0] * 1000 + @divTrunc(ts[1], 1_000_000);
 }
 
 fn flushMic(f: *c.FILE) void {
