@@ -70,9 +70,10 @@ fn buildWav(pcm: []const u8) ![]u8 {
     std.mem.writeInt(u16, out[34..36], 16, .little);
     @memcpy(out[36..40], "data");
     std.mem.writeInt(u32, out[40..44], @intCast(pcm.len), .little);
+// Нормализация громкости (Peak Normalization):
     const samples: [*]const i16 = @ptrCast(@alignCast(pcm.ptr));
     const num_samples = pcm.len / 2;
-    var max_val: i32 = 0;
+    var max_val: u32 = 0;
     for (0..num_samples) |i| {
         const v = @abs(@as(i32, samples[i]));
         if (v > max_val) max_val = v;
