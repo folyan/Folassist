@@ -865,7 +865,7 @@ pub fn main(init: std.process.Init) !void {
     var collect_frames: u32 = 0;
     var utt: std.ArrayList(u8) = .empty;
     var pending_reminder: ?i64 = null;
-    var reminder_deadline: i64 = 0;
+    const reminder_deadline: i64 = 0;
     var gate_hold: u32 = 0;
 
     while (true) {
