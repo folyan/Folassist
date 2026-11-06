@@ -31,7 +31,7 @@ const Config = struct {
     server_port: u16 = 9000,
     http_port: u16 = 9001,
     model: [:0]const u8 = "/dev/shm/model",
-    mic: [:0]const u8 = "single_gain",
+    mic: [:0]const u8 = "single_plugin",
     spk: [:0]const u8 = "plug:stereo_playback",
     input_dev: [:0]const u8 = "/dev/input/event0",
     brightness: u8 = 120,
@@ -41,14 +41,14 @@ const Config = struct {
     lon: f64 = 73.37,
     wait_sec: u32 = 4,
     collect_sec: u32 = 1,
-    dialog_sec: u32 = 0,
+    dialog_sec: u32 = 4,
     prompt_path: ?[]const u8 = null,
     verbose: bool = false,
     ringtone: ?[]const u8 = null,
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
-    gate: u32 = 0,
-    gain: f32 = 1.0,
+    gate: u32 = 30,
+    gain: f32 = 4.0,
     cmd_sim: u32 = 60,
     cloud: bool = true,
     level: bool = false,
@@ -596,6 +596,7 @@ fn openCapture() !*c.FILE {
     return c.popen(cmd.ptr, "r") orelse error.AudioDeviceError;
 }
 
+
 fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
     const bytes: [*]u8 = @ptrCast(buf);
     var got: usize = 0;
@@ -603,6 +604,12 @@ fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
         const n = c.fread(bytes + got, 1, FRAME * 2 - got, f);
         if (n == 0) return error.CaptureFailed;
         got += n;
+    }
+    if (cfg.gain != 1.0) {
+        for (buf) |*s| {
+            const multiplied = @as(f32, @floatFromInt(s.*)) * cfg.gain;
+            s.* = @intFromFloat(std.math.clamp(multiplied, -32768.0, 32767.0));
+        }
     }
 }
 
