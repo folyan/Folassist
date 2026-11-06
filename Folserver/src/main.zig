@@ -27,7 +27,7 @@ const DEFAULT_PHRASES = [_][]const u8{
 };
 var http_port: u16 = 9001;
 var yt_rate: u32 = 44100;
-var yt_channels: u8 = 2;
+var yt_channels: u8 = 1;
 
 var verbose = false;
 
@@ -267,7 +267,7 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
     if (op == .music) {
         var qbuf: [256]u8 = undefined;
         const q = youtubeQuery(text, &qbuf) orelse {
-            return speak(fd, "Не поняла, что включить.");
+            return speak(fd, "Не понял, что включить.");
         };
         var path: std.ArrayList(u8) = .empty;
         defer path.deinit(alloc);

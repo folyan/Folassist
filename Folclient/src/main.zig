@@ -550,6 +550,11 @@ fn cloudCommand(pcm: []const u8, force_ai: bool) bool {
         log("облако: {s}", .{@errorName(e)});
         return sent or played;
     };
+    if (pending_play) |p| {
+        startStream(p);
+        alloc.free(p);
+        pending_play = null;
+    }
     return true;
 }
 
