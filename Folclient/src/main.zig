@@ -35,17 +35,17 @@ const Config = struct {
     city: []const u8 = "Омске",
     lat: f64 = 54.99,
     lon: f64 = 73.37,
-    wait_sec: u32 = 5,
-    collect_sec: u32 = 3,
-    dialog_sec: u32 = 10,
+    wait_sec: u32 = 4,
+    collect_sec: u32 = 1,
+    dialog_sec: u32 = 0,
     prompt_path: ?[]const u8 = null,
-    verbose: bool = true,
+    verbose: bool = false,
     ringtone: ?[]const u8 = null,
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
-    gate: u32 = 550,
+    gate: u32 = 200,
     gain: f32 = 3.0,
-    cmd_sim: u32 = 80,
+    cmd_sim: u32 = 60,
     cloud: bool = true,
     level: bool = false,
 };
@@ -543,20 +543,22 @@ fn askServer(op: protocol.Op, text: []const u8, played: *bool) !void {
     try readReplies(played);
 }
 
-fn askAudio(flags: u8, pcm: []const u8, played: *bool) !void {
+fn askAudio(flags: u8, pcm: []const u8, played: *bool, sent: *bool) !void {
     if (sock < 0) sock = try connectServer();
     errdefer closeSock();
     defer speaker.close();
     try net.sendFrameF(sock, .cmd, flags, &.{pcm});
+    sent.* = true;
     try readReplies(played);
 }
 
 fn cloudCommand(pcm: []const u8, force_ai: bool) bool {
     const op_bits: u8 = if (force_ai) @intFromEnum(protocol.Op.ai) else @intFromEnum(protocol.Op.music);
     var played = false;
-    askAudio(protocol.AUDIO_FLAG | op_bits, pcm, &played) catch |e| {
+    var sent = false;
+    askAudio(protocol.AUDIO_FLAG | op_bits, pcm, &played, &sent) catch |e| {
         log("облако: {s}", .{@errorName(e)});
-        return played;
+        return sent or played;
     };
     return true;
 }

@@ -56,7 +56,7 @@ fn releaseId(id: u8) void {
     id_used[id] = false;
 }
 
-const MAX_STREAMS: u32 = 4;
+const MAX_STREAMS: u32 = 16;
 var streams = std.atomic.Value(u32).init(0);
 
 var password: []const u8 = "";
@@ -198,8 +198,15 @@ fn speak(fd: c_int, text: []const u8) !void {
 }
 
 fn youtubeQuery(text: []const u8, out: []u8) ?[]const u8 {
-    const i = std.mem.indexOf(u8, text, "включи") orelse return null;
-    var rest = std.mem.trim(u8, text[i + "включи".len ..], " ");
+    var start: usize = 0;
+    if (std.mem.indexOf(u8, text, "включи")) |i| {
+        start = i + "включи".len;
+    } else {
+        const sp = std.mem.indexOfScalar(u8, text, ' ') orelse return null;
+        if (stt.similarity(text[0..sp], "включи") < 60) return null;
+        start = sp;
+    }
+    var rest = std.mem.trim(u8, std.mem.trim(u8, text[start..], " "), " .,!?");
     for ([_][]const u8{ "в ютубе", "в ютуб", "ютубе", "ютуб", "youtube" }) |w| {
         if (std.mem.startsWith(u8, rest, w)) {
             rest = std.mem.trim(u8, rest[w.len..], " ");
