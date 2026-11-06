@@ -263,6 +263,12 @@ fn emitSentence(ctx: *anyopaque, sentence: []const u8) anyerror!void {
 
 fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !void {
     log("[{d}] код {d}: «{s}»", .{ s.id, @intFromEnum(op), text });
+    if (std.mem.indexOf(u8, text, "Стоп") != null or std.mem.indexOf(u8, text, "Хватит") != null) {
+        log("[{d}] перехвачен стоп, гасим звук", .{s.id});
+        // Отправляем пустой ответ клиенту, чтобы он закрыл свой стрим
+        try net.sendFrame(fd, .reply, &.{});
+        return;
+    }
 
     if (op == .music) {
         var qbuf: [256]u8 = undefined;
