@@ -56,7 +56,7 @@ fn releaseId(id: u8) void {
     id_used[id] = false;
 }
 
-const MAX_STREAMS: u32 = 16;
+const MAX_STREAMS: u32 = 4;
 var streams = std.atomic.Value(u32).init(0);
 
 var password: []const u8 = "";

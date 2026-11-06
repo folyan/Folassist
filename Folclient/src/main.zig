@@ -168,16 +168,6 @@ fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
     }
 }
 
-var last_read_end_ms: i64 = 0;
-
-extern "c" fn clock_gettime(clk: c_int, tp: *[2]i64) c_int;
-
-fn monoMs() i64 {
-    var ts: [2]i64 = undefined;
-    _ = clock_gettime(1, &ts);
-    return ts[0] * 1000 + @divTrunc(ts[1], 1_000_000);
-}
-
 fn flushMic(f: *c.FILE) void {
     _ = f;
 }
@@ -1051,10 +1041,6 @@ pub fn main(init: std.process.Init) !void {
             .none => {},
         }
 
-        const t_start_ms = monoMs();
-        if (last_read_end_ms > 0 and t_start_ms - last_read_end_ms > 200) {
-            log("обработка кадра заняла {d} мс", .{t_start_ms - last_read_end_ms});
-        }
         readFrame(mic, &buf) catch {
             log("захват звука оборвался, переоткрываю", .{});
             _ = c.pclose(mic);
@@ -1062,7 +1048,6 @@ pub fn main(init: std.process.Init) !void {
             mic = openCapture() catch return error.CaptureFailed;
             continue;
         };
-        last_read_end_ms = monoMs();
         if (utt_audio_on) {
             if (utt_audio.items.len + FRAME * 2 <= UTT_MAX_BYTES) {
                 utt_audio.appendSlice(alloc, std.mem.sliceAsBytes(&buf)) catch {};
