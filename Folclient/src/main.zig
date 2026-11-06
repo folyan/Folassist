@@ -13,9 +13,10 @@ const net = protocol.Net(c);
 const alloc = std.heap.c_allocator;
 
 const RATE: u32 = 16000;
-const FRAME: usize = 4000;
-const FPS: u32 = 4;
-const GATE_HOLD_FRAMES: u32 = 10;
+// 640 сэмплов = ровно 40 мс (идеально совпадает с period_size 640 в asound.conf!)
+const FRAME: usize = 640; 
+const FPS: u32 = 25; // 1000ms / 40ms = 25 кадров в секунду
+const GATE_HOLD_FRAMES: u32 = 25;
 const MAX_UTT_BYTES: usize = 16000 * 2 * 30;
 const UTT_MAX_BYTES: usize = 16000 * 2 * 10;
 const REMINDER_WAIT_SEC: i64 = 30;
@@ -393,9 +394,6 @@ fn exchange(op: protocol.Op, text: []const u8) void {
     log("ответ не получен", .{});
 }
 
-// -------------------------------------------------------------
-// Асинхронная очередь задач (Worker Thread)
-// -------------------------------------------------------------
 const TaskKind = enum {
     command,
     cloud_audio,
@@ -509,9 +507,6 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     }
 }
 
-// -------------------------------------------------------------
-// Хелперы распознавания
-// -------------------------------------------------------------
 fn opFor(cmd: []const u8) protocol.Op {
     if (std.mem.indexOf(u8, cmd, "погод") != null) return .weather;
     if (std.mem.indexOf(u8, cmd, "будильник") != null or std.mem.indexOf(u8, cmd, "напомни") != null or std.mem.indexOf(u8, cmd, "таймер") != null) return .ai;
@@ -594,9 +589,10 @@ fn val(arg: []const u8, comptime key: []const u8) ?[]const u8 {
     return null;
 }
 
+// Запуск arecord с явным буфером на 500ms и периодом 40ms, чтобы исключить xrun
 fn openCapture() !*c.FILE {
     var b: [256]u8 = undefined;
-    const cmd = zfmt.bufPrintZ(&b, "arecord -q -D {s} -c 1 -f S16_LE -r {d} -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
+    const cmd = zfmt.bufPrintZ(&b, "arecord -q -D {s} -c 1 -f S16_LE -r {d} --buffer-time=500000 --period-time=40000 -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
     return c.popen(cmd.ptr, "r") orelse error.AudioDeviceError;
 }
 
@@ -869,7 +865,7 @@ pub fn main(init: std.process.Init) !void {
     var collect_frames: u32 = 0;
     var utt: std.ArrayList(u8) = .empty;
     var pending_reminder: ?i64 = null;
-    const reminder_deadline: i64 = 0;
+    var reminder_deadline: i64 = 0;
     var gate_hold: u32 = 0;
 
     while (true) {
@@ -911,7 +907,7 @@ pub fn main(init: std.process.Init) !void {
 
         readFrame(mic, &buf) catch {
             _ = c.pclose(mic);
-            _ = c.usleep(200_000);
+            _ = c.usleep(50_000);
             mic = openCapture() catch return error.CaptureFailed;
             continue;
         };
@@ -991,7 +987,6 @@ pub fn main(init: std.process.Init) !void {
         const wake_rest = commandAfterWake(trimmed);
         const body = wake_rest orelse trimmed;
 
-        // Немедленная обработка СТОП прямо из потока захвата
         if (isStopPhrase(body)) {
             log("мгновенный стоп!", .{});
             stopStream();
