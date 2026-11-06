@@ -70,7 +70,24 @@ fn buildWav(pcm: []const u8) ![]u8 {
     std.mem.writeInt(u16, out[34..36], 16, .little);
     @memcpy(out[36..40], "data");
     std.mem.writeInt(u32, out[40..44], @intCast(pcm.len), .little);
-    @memcpy(out[44..], pcm);
+    const samples: [*]const i16 = @ptrCast(@alignCast(pcm.ptr));
+    const num_samples = pcm.len / 2;
+    var max_val: i32 = 0;
+    for (0..num_samples) |i| {
+        const v = @abs(@as(i32, samples[i]));
+        if (v > max_val) max_val = v;
+    }
+
+    const dest: [*]i16 = @ptrCast(@alignCast(out.ptr + 44));
+    if (max_val > 100 and max_val < 20000) {
+        const mult: f32 = 26000.0 / @as(f32, @floatFromInt(max_val));
+        for (0..num_samples) |i| {
+            const scaled = @as(f32, @floatFromInt(samples[i])) * mult;
+            dest[i] = @intFromFloat(std.math.clamp(scaled, -32767.0, 32767.0));
+        }
+    } else {
+        @memcpy(out[44..], pcm);
+    }
     return out;
 }
 

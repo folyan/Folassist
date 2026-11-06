@@ -638,9 +638,7 @@ fn checkPartialWake(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.S
 fn feedSherpa(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.SherpaOnnxOnlineStream, buf: *const [FRAME]i16) !?[]u8 {
     var fbuf: [FRAME]f32 = undefined;
     for (buf, 0..) |s, i| {
-        // Усиление x40.0 с мягким ограничением tanh (убирает тишину и защищает от хрипов)
-        const raw = (@as(f32, @floatFromInt(s)) / 32768.0) * cfg.gain;
-        fbuf[i] = std.math.tanh(raw);
+        fbuf[i] = @as(f32, @floatFromInt(s)) / 32768.0;
     }
     c.SherpaOnnxOnlineStreamAcceptWaveform(stream, @intCast(RATE), @ptrCast(&fbuf), @intCast(FRAME));
 
@@ -981,8 +979,8 @@ pub fn main(init: std.process.Init) !void {
     sonnx_cfg.decoding_method = "greedy_search";
     sonnx_cfg.max_active_paths = 4;
     sonnx_cfg.enable_endpoint = 1;
-    sonnx_cfg.rule1_min_trailing_silence = 2.4;
-    sonnx_cfg.rule2_min_trailing_silence = 1.0;
+    sonnx_cfg.rule1_min_trailing_silence = 0.8;
+    sonnx_cfg.rule2_min_trailing_silence = 0.5;
     sonnx_cfg.rule3_min_utterance_length = 30.0;
 
     log("загружаю модель Sherpa-ONNX...", .{});
