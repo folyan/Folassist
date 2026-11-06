@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
