@@ -312,7 +312,7 @@ jobs:
         run: |
           find dist -type f
           FILES=$(find dist -type f \( -name "folclient-*" -o -name "folwatchdog-*" -o -name "folserver-*.tar.gz" \))
-          (cd dist && find . -type f \( -name "folclient-*" -o -name "folwatchdog-*" -o -name "folserver-*.tar.gz" \) -exec sha256sum {} + | sed "s| \./.*/| |" > sha256sums.txt)
+          (cd dist && find . -type f \( -name "folclient-*" -o -name "folwatchdog-*" -o -name "folserver-*.tar.gz" \) | while read -r f; do h=$(sha256sum "$f" | cut -d' ' -f1); echo "$h  $(basename "$f")"; done > sha256sums.txt)
           printf '%s\n' "$ED25519_PRIVATE_KEY" > priv.pem
           openssl pkeyutl -sign -inkey priv.pem -rawin -in dist/sha256sums.txt -out dist/sha256sums.txt.sig
           rm -f priv.pem

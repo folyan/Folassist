@@ -36,16 +36,16 @@ const Config = struct {
     lat: f64 = 54.99,
     lon: f64 = 73.37,
     wait_sec: u32 = 5,
-    collect_sec: u32 = 1,
-    dialog_sec: u32 = 0,
+    collect_sec: u32 = 3,
+    dialog_sec: u32 = 10,
     prompt_path: ?[]const u8 = null,
-    verbose: bool = false,
+    verbose: bool = true,
     ringtone: ?[]const u8 = null,
     remind_sound: ?[]const u8 = null,
     store: ?[]const u8 = null,
-    gate: u32 = 250,
-    gain: f32 = 4.0,
-    cmd_sim: u32 = 55,
+    gate: u32 = 550,
+    gain: f32 = 3.0,
+    cmd_sim: u32 = 80,
     level: bool = false,
 };
 
@@ -152,7 +152,7 @@ fn val(arg: []const u8, comptime key: []const u8) ?[]const u8 {
 
 fn openCapture() !*c.FILE {
     var b: [256]u8 = undefined;
-    const cmd = zfmt.bufPrintZ(&b, "arecord -q --buffer-time=500000 -D {s} -c 1 -f S16_LE -r {d} -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
+    const cmd = zfmt.bufPrintZ(&b, "arecord -q -D {s} -c 1 -f S16_LE -r {d} -t raw", .{ cfg.mic, RATE }) catch return error.AudioDeviceError;
     return c.popen(cmd.ptr, "r") orelse error.AudioDeviceError;
 }
 
@@ -164,6 +164,14 @@ fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
         if (n == 0) return error.CaptureFailed;
         got += n;
     }
+}
+
+var last_read_end_ms: i64 = 0;
+
+fn monoMs() i64 {
+    var ts: c.struct_timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK_MONOTONIC, &ts);
+    return @as(i64, ts.tv_sec) * 1000 + @divTrunc(@as(i64, ts.tv_nsec), 1_000_000);
 }
 
 fn flushMic(f: *c.FILE) void {
@@ -189,6 +197,7 @@ const Speaker = struct {
         const h = self.handle.?;
 
         const total = pcm.len / 2;
+        deaf_frames += @as(u32, @intCast((total / rate + 1) * FPS));
         var off: usize = 0;
         var failures: u32 = 0;
         while (off < total) {
@@ -212,6 +221,7 @@ const Speaker = struct {
 };
 
 var speaker: Speaker = .{};
+var deaf_frames: u32 = 0;
 
 fn playOnce(rate: u32, pcm: []const u8) void {
     speaker.write(rate, pcm);
@@ -250,6 +260,23 @@ fn stopStream() void {
     killGroup(&stream_pid);
 }
 
+var stream_paused = false;
+var stream_pause_frames: u32 = 0;
+
+fn pauseStream() void {
+    if (stream_pid <= 0 or stream_paused) return;
+    _ = c.kill(-stream_pid, c.SIGSTOP);
+    stream_paused = true;
+    stream_pause_frames = 10 * FPS;
+}
+
+fn resumeStream() void {
+    stream_pause_frames = 0;
+    if (!stream_paused) return;
+    stream_paused = false;
+    if (stream_pid > 0) _ = c.kill(-stream_pid, c.SIGCONT);
+}
+
 fn stopRing() void {
     killGroup(&ring_pid);
 }
@@ -276,6 +303,7 @@ fn startStream(path: []const u8) void {
     const pid = spawnShell(cmd.ptr);
     if (pid <= 0) return;
     stream_pid = pid;
+    stream_paused = false;
     log("поток запущен (pid {d})", .{pid});
 }
 
@@ -567,6 +595,7 @@ fn checkPartialWake(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.S
             wake_fired = true;
             disp.showEmotion(.def, 3);
             top_leds.startListening();
+            pauseStream();
             playWakeSound();
         }
     }
@@ -752,6 +781,7 @@ fn dispatchBatch(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.Sher
 
 fn handleCommand(cmd: []const u8, force_ai: bool) void {
     top_leds.stopListening();
+    resumeStream();
     if (std.mem.indexOf(u8, cmd, "ночной режим") != null) {
         if (std.mem.indexOf(u8, cmd, "выключи") != null or std.mem.indexOf(u8, cmd, "отключи") != null) {
             disp.setNightMode(false);
@@ -906,7 +936,7 @@ pub fn main(init: std.process.Init) !void {
     sonnx_cfg.model_config.transducer.encoder = enc_p.ptr;
     sonnx_cfg.model_config.transducer.decoder = dec_p.ptr;
     sonnx_cfg.model_config.transducer.joiner = join_p.ptr;
-    sonnx_cfg.model_config.num_threads = 3;
+    sonnx_cfg.model_config.num_threads = 1;
     sonnx_cfg.model_config.provider = "cpu";
     sonnx_cfg.decoding_method = "greedy_search";
     sonnx_cfg.max_active_paths = 4;
@@ -924,7 +954,7 @@ pub fn main(init: std.process.Init) !void {
     defer c.SherpaOnnxDestroyOnlineStream(stream);
 
     log("открываю захват звука через arecord ({s})...", .{cfg.mic});
-    const mic = try openCapture();
+    var mic = try openCapture();
     log("микрофон готов!", .{});
 
     log("слушаю, слова активации: {d} шт., сервер {s}:{d}", .{ wake_count, cfg.server_ip, cfg.server_port });
@@ -944,6 +974,7 @@ pub fn main(init: std.process.Init) !void {
                 if (!wake_fired_last) playWakeSound();
                 disp.showEmotion(.def, 3);
                 top_leds.startListening();
+                pauseStream();
                 armed = cfg.wait_sec * FPS;
             },
             .vol_up => {
@@ -974,11 +1005,28 @@ pub fn main(init: std.process.Init) !void {
             .none => {},
         }
 
-        try readFrame(mic, &buf);
+        const t_start_ms = monoMs();
+        if (last_read_end_ms > 0 and t_start_ms - last_read_end_ms > 200) {
+            log("обработка кадра заняла {d} мс", .{t_start_ms - last_read_end_ms});
+        }
+        readFrame(mic, &buf) catch {
+            log("захват звука оборвался, переоткрываю", .{});
+            _ = c.pclose(mic);
+            _ = c.usleep(500_000);
+            mic = openCapture() catch return error.CaptureFailed;
+            continue;
+        };
+        last_read_end_ms = monoMs();
 
         if (mic_muted) {
             _ = c.usleep(50_000);
             continue;
+        }
+        if (armed == 0 and dialog_frames == 0 and pending_reminder == null) {
+            const rms = frameRms(&buf);
+            if (rms < 300) {
+                _ = c.usleep(20_000);
+            }
         }
         if (armed > 0) armed -= 1;
         if (dialog_frames > 0) dialog_frames -= 1;
@@ -998,6 +1046,17 @@ pub fn main(init: std.process.Init) !void {
         if (collect_frames > 0) {
             collect_frames -= 1;
             if (collect_frames == 0 and acc.items.len > 0) dispatchBatch(rec, stream, mic);
+        }
+
+        if (stream_pause_frames > 0) {
+            stream_pause_frames -= 1;
+            if (stream_pause_frames == 0) resumeStream();
+        }
+
+        if (deaf_frames > 0) {
+            deaf_frames -= 1;
+            if (deaf_frames == 0) c.SherpaOnnxOnlineStreamReset(rec, stream);
+            continue;
         }
 
         if (cfg.gate > 0 or cfg.level) {
@@ -1057,6 +1116,7 @@ pub fn main(init: std.process.Init) !void {
             if (!wake_fired_last) playWakeSound();
             disp.showEmotion(.def, 3);
             top_leds.startListening();
+            pauseStream();
             if (rest.len == 0) {
                 armed = cfg.wait_sec * FPS;
                 continue;
