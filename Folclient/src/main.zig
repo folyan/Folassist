@@ -245,6 +245,7 @@ fn spawnShell(cmd: [*:0]const u8) c.pid_t {
 
 fn killGroup(pid: *c.pid_t) void {
     if (pid.* <= 0) return;
+    _ = c.kill(-pid.*, c.SIGCONT);
     _ = c.kill(-pid.*, c.SIGTERM);
     _ = c.waitpid(pid.*, null, 0);
     pid.* = 0;
@@ -1060,12 +1061,6 @@ pub fn main(init: std.process.Init) !void {
         if (mic_muted) {
             _ = c.usleep(50_000);
             continue;
-        }
-        if (armed == 0 and dialog_frames == 0 and pending_reminder == null) {
-            const rms = frameRms(&buf);
-            if (rms < 300) {
-                _ = c.usleep(20_000);
-            }
         }
         if (armed > 0) armed -= 1;
         if (dialog_frames > 0) dialog_frames -= 1;
