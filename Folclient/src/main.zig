@@ -46,6 +46,7 @@ const Config = struct {
     gate: u32 = 550,
     gain: f32 = 3.0,
     cmd_sim: u32 = 80,
+    cloud: bool = true,
     level: bool = false,
 };
 
@@ -131,6 +132,7 @@ const USAGE =
     \\  --gate=N             не распознавать тишину ниже уровня N, по умолчанию 550, 0 выключает
     \\  --level              печатать уровень звука, чтобы подобрать --gate
     \\  --gain=N             усиление перед распознаванием, по умолчанию 3
+    \\  --no-cloud          не отправлять фразу на облачное распознавание
     \\  --cmd-sim=N         похожесть слова команды в процентах, по умолчанию 80
     \\  --verbose            подробный лог
     \\  --help               эта справка
@@ -538,6 +540,38 @@ fn askServer(op: protocol.Op, text: []const u8, played: *bool) !void {
     errdefer closeSock();
     defer speaker.close();
     try net.sendFrameF(sock, .cmd, @intFromEnum(op), &.{text});
+    try readReplies(played);
+}
+
+fn askAudio(flags: u8, pcm: []const u8, played: *bool) !void {
+    if (sock < 0) sock = try connectServer();
+    errdefer closeSock();
+    defer speaker.close();
+    try net.sendFrameF(sock, .cmd, flags, &.{pcm});
+    try readReplies(played);
+}
+
+fn cloudCommand(pcm: []const u8, force_ai: bool) bool {
+    const op_bits: u8 = if (force_ai) @intFromEnum(protocol.Op.ai) else @intFromEnum(protocol.Op.music);
+    var played = false;
+    askAudio(protocol.AUDIO_FLAG | op_bits, pcm, &played) catch |e| {
+        log("облако: {s}", .{@errorName(e)});
+        return played;
+    };
+    return true;
+}
+
+const UTT_MAX_BYTES: usize = 16000 * 2 * 10;
+var utt_audio: std.ArrayList(u8) = .empty;
+var utt_audio_on = false;
+
+fn utteranceStart() void {
+    if (!cfg.cloud) return;
+    utt_audio.clearRetainingCapacity();
+    utt_audio_on = true;
+}
+
+fn readReplies(played: *bool) !void {
     while (true) {
         const f = try net.recvFrame(alloc, sock);
         switch (f.msg_type) {
@@ -597,6 +631,7 @@ fn checkPartialWake(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.S
             wake_fired = true;
             disp.showEmotion(.def, 3);
             top_leds.startListening();
+            utteranceStart();
             pauseStream();
             playWakeSound();
         }
@@ -705,12 +740,13 @@ fn defaultStorePath() []const u8 {
 
 fn opFor(cmd: []const u8) protocol.Op {
     if (std.mem.indexOf(u8, cmd, "погод") != null) return .weather;
+    if (std.mem.indexOf(u8, cmd, "будильник") != null or std.mem.indexOf(u8, cmd, "напомни") != null or std.mem.indexOf(u8, cmd, "таймер") != null) return .ai;
     var it = std.mem.tokenizeScalar(u8, cmd, ' ');
     while (it.next()) |word| {
         if (matchesFuzzy(word, "погода", cfg.cmd_sim) or matchesFuzzy(word, "погоду", cfg.cmd_sim) or matchesFuzzy(word, "погодка", cfg.cmd_sim)) {
             return .weather;
         }
-        if (matchesFuzzy(word, "включи", cfg.cmd_sim) or matchesFuzzy(word, "вруби", cfg.cmd_sim) or matchesFuzzy(word, "поставь", cfg.cmd_sim) or matchesFuzzy(word, "сыграй", cfg.cmd_sim)) {
+        if (matchesFuzzy(word, "включи", cfg.cmd_sim) or matchesFuzzy(word, "вруби", cfg.cmd_sim) or matchesFuzzy(word, "сыграй", cfg.cmd_sim)) {
             return .music;
         }
     }
@@ -775,8 +811,11 @@ fn handleEvent(piece: []const u8) bool {
 }
 
 fn dispatchBatch(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.SherpaOnnxOnlineStream, mic: *c.FILE) void {
-    handleCommand(acc.items, acc_force_ai);
+    const sent = utt_audio_on and utt_audio.items.len > 0 and cloudCommand(utt_audio.items, acc_force_ai);
+    utt_audio_on = false;
+    if (!sent) handleCommand(acc.items, acc_force_ai);
     acc.clearRetainingCapacity();
+    utt_audio.clearRetainingCapacity();
     flushMic(mic);
     c.SherpaOnnxOnlineStreamReset(rec, stream);
 }
@@ -860,6 +899,8 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--help")) {
             std.debug.print("{s}\n", .{USAGE});
             return;
+        } else if (std.mem.eql(u8, arg, "--no-cloud")) {
+            cfg.cloud = false;
         } else if (std.mem.eql(u8, arg, "--level")) {
             cfg.level = true;
         } else if (val(arg, "--cmd-sim")) |v| {
@@ -976,6 +1017,7 @@ pub fn main(init: std.process.Init) !void {
                 if (!wake_fired_last) playWakeSound();
                 disp.showEmotion(.def, 3);
                 top_leds.startListening();
+                utteranceStart();
                 pauseStream();
                 armed = cfg.wait_sec * FPS;
             },
@@ -1019,6 +1061,11 @@ pub fn main(init: std.process.Init) !void {
             continue;
         };
         last_read_end_ms = monoMs();
+        if (utt_audio_on) {
+            if (utt_audio.items.len + FRAME * 2 <= UTT_MAX_BYTES) {
+                utt_audio.appendSlice(alloc, std.mem.sliceAsBytes(&buf)) catch {};
+            } else utt_audio_on = false;
+        }
 
         if (mic_muted) {
             _ = c.usleep(50_000);

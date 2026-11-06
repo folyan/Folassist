@@ -11,6 +11,7 @@ pub const MAX_PAYLOAD: u32 = 16 * 1024 * 1024;
 pub const MAX_MODEL: u32 = 512 * 1024 * 1024;
 pub const REPLY_MORE: u8 = 0b0000_0001;
 pub const CACHE_ID: u8 = 0b0000_0010;
+pub const AUDIO_FLAG: u8 = 0b0000_0100;
 
 pub const EMOTION_MASK: u8 = 0b0000_0110;
 pub const EMOTION_SHIFT: u3 = 1;

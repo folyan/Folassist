@@ -8,6 +8,7 @@ const weather = @import("weather.zig");
 const tts_mod = @import("tts.zig");
 const sync = @import("sync.zig");
 const update = @import("update.zig");
+const stt = @import("stt.zig");
 
 const net = protocol.Net(c);
 const alloc = std.heap.c_allocator;
@@ -276,7 +277,22 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
         var sc: StreamCtx = .{ .fd = fd };
         const sink = ai.Sink{ .ctx = &sc, .emit = emitSentence };
         const cp: ?[]const u8 = if (s.prompt) |p| p else null;
-        if (ai.askStream(alloc, s.id, text, cp, sink, &sc.emotion)) |full| {
+        const res: anyerror![]u8 = blk: {
+            var kbuf: [stt.MAX_KEYS][]const u8 = undefined;
+            const kn = stt.orderedKeys(&kbuf);
+            var last: anyerror = error.NoApiKey;
+            for (kbuf[0..kn]) |k| {
+                if (ai.askStream(alloc, s.id, text, cp, sink, &sc.emotion, k)) |full| {
+                    break :blk full;
+                } else |e| {
+                    last = e;
+                    log("[{d}] ИИ, ключ не сработал: {s}", .{ s.id, @errorName(e) });
+                    if (sc.sent) break;
+                }
+            }
+            break :blk last;
+        };
+        if (res) |full| {
             alloc.free(full);
             var flags: u8 = 0;
             flags = protocol.setEmotion(flags, sc.emotion);
@@ -337,6 +353,32 @@ fn sendCache(fd: c_int, new_id: ?u8) !void {
     try net.sendFrameF(fd, .cache, flags, parts[0..n]);
 }
 
+fn classify(text: []const u8) protocol.Op {
+    if (std.mem.indexOf(u8, text, "погод") != null) return .weather;
+    if (std.mem.indexOf(u8, text, "будильник") != null or std.mem.indexOf(u8, text, "напомни") != null or std.mem.indexOf(u8, text, "таймер") != null) return .ai;
+    var it = std.mem.tokenizeScalar(u8, text, ' ');
+    while (it.next()) |w| {
+        for ([_][]const u8{ "включи", "вруби", "сыграй" }) |k| {
+            if (stt.similarity(w, k) >= 60) return .music;
+        }
+    }
+    return .ai;
+}
+
+fn handleAudio(fd: c_int, s: *const Session, flags: u8, pcm: []const u8) !void {
+    const forced_ai = (flags & 0b11) == @intFromEnum(protocol.Op.ai);
+    const raw = stt.transcribe(pcm) catch |e| {
+        log("[{d}] распознавание: {s}", .{ s.id, @errorName(e) });
+        return speak(fd, "Не получилось распознать.");
+    };
+    defer alloc.free(raw);
+    const text = stt.stripWake(std.mem.trim(u8, raw, " .,!?"));
+    log("[{d}] облако услышало: «{s}»", .{ s.id, text });
+    if (text.len == 0) return speak(fd, "Не расслышала.");
+    const op: protocol.Op = if (forced_ai) .ai else classify(text);
+    return handleCmd(fd, s, op, text);
+}
+
 fn handleConn(fd: c_int) !void {
     var s: Session = .{};
     defer if (s.claimed) releaseId(s.id);
@@ -350,6 +392,14 @@ fn handleConn(fd: c_int) !void {
         if (!authed and f.msg_type != .hello and f.msg_type != .cmd) return error.Unauthorized;
         switch (f.msg_type) {
             .cmd => {
+                if ((f.flags & protocol.AUDIO_FLAG) != 0) {
+                    if (!authed) return error.Unauthorized;
+                    handleAudio(fd, &s, f.flags, f.payload) catch |e| {
+                        log("[{d}] аудио: {s}", .{ s.id, @errorName(e) });
+                        try net.sendFrame(fd, .reply, &.{});
+                    };
+                    continue;
+                }
                 const op: protocol.Op = @enumFromInt(@as(u2, @truncate(f.flags)));
                 if (op == .model_req) {
                     // запрос модели идёт без hello, пароль лежит в payload
@@ -583,6 +633,8 @@ pub fn main(init: std.process.Init) !void {
             port = std.fmt.parseInt(u16, v, 10) catch 9000;
         } else if (val(arg, "--http-port")) |v| {
             http_port = std.fmt.parseInt(u16, v, 10) catch 9001;
+        } else if (val(arg, "--groq-key")) |v| {
+            if (!stt.addKey(v)) log("--groq-key: пусто или больше 5 ключей", .{});
         } else if (val(arg, "--proxy")) |v| {
             ai.setProxy(v);
         } else if (val(arg, "--ai-model")) |v| {

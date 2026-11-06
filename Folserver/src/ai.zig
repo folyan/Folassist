@@ -140,9 +140,7 @@ fn flushChunks(allocator: std.mem.Allocator, pending: *std.ArrayList(u8), sink: 
     try pending.appendSlice(allocator, rest);
 }
 
-pub fn askStream(allocator: std.mem.Allocator, client_id: u8, query: []const u8, client_prompt: ?[]const u8, sink: Sink, emotion_out: *protocol.Emotion) ![]u8 {
-    const key_c = c.getenv(@ptrCast("GROQ_API_KEY")) orelse return error.NoApiKey;
-    const key = std.mem.span(@as([*:0]const u8, @ptrCast(key_c)));
+pub fn askStream(allocator: std.mem.Allocator, client_id: u8, query: []const u8, client_prompt: ?[]const u8, sink: Sink, emotion_out: *protocol.Emotion, key: []const u8) ![]u8 {
     if (std.mem.indexOfAny(u8, key, "\"\\\r\n") != null) return error.BadApiKey;
 
     var body: std.ArrayList(u8) = .empty;
