@@ -1023,7 +1023,11 @@ pub fn main(init: std.process.Init) !void {
             continue;
         };
 
-        if (utt_audio_on) {
+        // Эхо: пока динамик играет ответ, в облачный буфер голос не пишем, иначе STT
+        // распознает собственную реплику ассистента как вопрос пользователя.
+        if (speakingNow()) {
+            utt_audio.clearRetainingCapacity();
+        } else if (utt_audio_on) {
             if (utt_audio.items.len + FRAME * 2 <= UTT_MAX_BYTES) {
                 utt_audio.appendSlice(alloc, std.mem.sliceAsBytes(&buf)) catch {};
             } else utt_audio_on = false;

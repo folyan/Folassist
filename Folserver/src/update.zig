@@ -56,10 +56,20 @@ fn readApp(dir: []const u8) ?u8 {
 
 pub fn refresh() void {
     _ = c.mkdir(ROOT, 0o755);
-    if (!sh("curl -sfL -H 'Accept: application/vnd.github+json' -o update/latest.json https://api.github.com/repos/" ++ REPO ++ "/releases/latest")) return;
-    const data = zfmt.readFile(c, alloc, "update/latest.json") catch return;
+    std.debug.print("update: проверяю релизы {s}\n", .{REPO});
+    if (!sh("curl -sfL -H 'Accept: application/vnd.github+json' -o update/latest.json https://api.github.com/repos/" ++ REPO ++ "/releases/latest")) {
+        std.debug.print("update: GitHub не отдал latest (нет сети, неверный REPO или нет опубликованного релиза)\n", .{});
+        return;
+    }
+    const data = zfmt.readFile(c, alloc, "update/latest.json") catch {
+        std.debug.print("update: не прочитан update/latest.json\n", .{});
+        return;
+    };
     defer alloc.free(data);
-    const parsed = std.json.parseFromSlice(Release, alloc, data, .{ .ignore_unknown_fields = true }) catch return;
+    const parsed = std.json.parseFromSlice(Release, alloc, data, .{ .ignore_unknown_fields = true }) catch {
+        std.debug.print("update: не разобран JSON релиза\n", .{});
+        return;
+    };
     defer parsed.deinit();
     const ver = std.mem.trimStart(u8, parsed.value.tag_name, "v");
     if (latest_tag) |old| {
@@ -80,7 +90,10 @@ pub fn refresh() void {
         defer alloc.free(cmd);
         if (!sh(cmd)) ok = false;
     }
-    if (!ok) return;
+    if (!ok) {
+        std.debug.print("update: не все файлы релиза {s} скачались\n", .{ver});
+        return;
+    }
 
     // проверяем каждый бинарник и app.txt по хешам из того же релиза
     for (parsed.value.assets) |a| {
@@ -92,7 +105,11 @@ pub fn refresh() void {
         }
     }
 
-    const app = readApp(dir) orelse return;
+    const app = readApp(dir) orelse {
+        std.debug.print("update: в релизе {s} нет корректного app.txt\n", .{ver});
+        return;
+    };
+    std.debug.print("update: принят релиз {s}, APP {d}\n", .{ ver, app });
 
     if (latest_tag) |old| alloc.free(old);
     if (latest_dir) |old| alloc.free(old);
