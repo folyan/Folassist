@@ -14,16 +14,14 @@ pub const Color = struct {
 };
 
 pub const INDICATOR_BRIGHTNESS: u8 = 5;
-// Время в миллисекундах: раньше тут были «кадры по 4 в секунду», а tick() зовут 25 раз
-// в секунду, поэтому синий индикатор гас через 1.6 с вместо 10.
-const LISTEN_MAX_MS: u64 = 10_000;
 
 pub const TopLeds = struct {
     muted: bool = false,
-    listen_until_ms: u64 = 0,
+    listening: bool = false,
     has_leds: bool = false,
     state: [36]u8 = @splat(255),
-    // startListening/stopListening зовёт поток-обработчик, tick/apply — главный цикл.
+    // setListening зовётся из главного цикла, а setMuted/apply — тоже оттуда, но мьютекс
+    // оставлен на случай, если кто-то дернёт их из другого потока.
     lock: sync.Mutex = .{},
 
     pub fn init() TopLeds {
@@ -42,28 +40,14 @@ pub const TopLeds = struct {
         self.applyLocked();
     }
 
-    pub fn startListening(self: *TopLeds) void {
+    /// Синий горит ровно пока микрофон ждёт или принимает речь (включая окно диалога
+    /// после ответа). Во время обработки и озвучки — не горит.
+    pub fn setListening(self: *TopLeds, on: bool) void {
         self.lock.lock();
         defer self.lock.unlock();
-        self.listen_until_ms = sync.nowMs() + LISTEN_MAX_MS;
+        if (self.listening == on) return;
+        self.listening = on;
         self.applyLocked();
-    }
-
-    pub fn stopListening(self: *TopLeds) void {
-        self.lock.lock();
-        defer self.lock.unlock();
-        if (self.listen_until_ms == 0) return;
-        self.listen_until_ms = 0;
-        self.applyLocked();
-    }
-
-    pub fn tick(self: *TopLeds) void {
-        self.lock.lock();
-        defer self.lock.unlock();
-        if (self.listen_until_ms != 0 and sync.nowMs() >= self.listen_until_ms) {
-            self.listen_until_ms = 0;
-            self.applyLocked();
-        }
     }
 
     fn writeChannel(idx: usize, val: u8) bool {
@@ -84,7 +68,7 @@ pub const TopLeds = struct {
     }
 
     fn currentColor(self: *const TopLeds) struct { col: Color, br: u8 } {
-        if (self.listen_until_ms != 0) return .{ .col = Color.blue, .br = INDICATOR_BRIGHTNESS };
+        if (self.listening) return .{ .col = Color.blue, .br = INDICATOR_BRIGHTNESS };
         if (self.muted) return .{ .col = Color.red, .br = INDICATOR_BRIGHTNESS };
         return .{ .col = Color.off, .br = 0 };
     }
@@ -115,4 +99,3 @@ pub const TopLeds = struct {
         }
     }
 };
-

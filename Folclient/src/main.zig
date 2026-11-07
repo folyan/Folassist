@@ -457,7 +457,6 @@ fn playFile(path: ?[]const u8) void {
 }
 
 fn handleCommand(cmd: []const u8, force_ai: bool) void {
-    top_leds.stopListening();
     resumeStream();
     if (std.mem.indexOf(u8, cmd, "ночной режим") != null) {
         if (std.mem.indexOf(u8, cmd, "выключи") != null or std.mem.indexOf(u8, cmd, "отключи") != null) {
@@ -514,6 +513,7 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
                 if (task.text) |t| {
                     if (!tryScheduleEvent(t, null)) handleCommand(t, task.force_ai);
                     alloc.free(t);
+                    dialog_open.store(true, .release);
                 }
             },
             .cloud_audio => {
@@ -531,6 +531,7 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
                     }
                     alloc.free(a);
                     if (task.text) |t| alloc.free(t);
+                    dialog_open.store(true, .release);
                 }
             },
             .event_alarm => {
@@ -666,6 +667,9 @@ fn readFrame(f: *c.FILE, buf: *[FRAME]i16) !void {
 }
 
 var wake_fired = false;
+// Рабочий поток ставит флаг, когда ответ готов: главный цикл открывает окно диалога
+// (без повторного «фокус»), и синий горит на время этого окна.
+var dialog_open = std.atomic.Value(bool).init(false);
 var wake_fired_last = false;
 var utt_audio: std.ArrayList(u8) = .empty;
 var utt_audio_on = false;
@@ -688,7 +692,6 @@ fn checkPartialWake(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.S
         if (commandAfterWake(p) != null) {
             wake_fired = true;
             disp.showEmotion(.def, 3 * 1000);
-            top_leds.startListening();
             utteranceStart();
             pauseStream();
             playWakeSound();
@@ -867,6 +870,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (stop_count == 0) {
         addStop("стоп");
+        addStop("столб");
         addStop("хватит");
     }
 
@@ -925,7 +929,8 @@ pub fn main(init: std.process.Init) !void {
 
     while (true) {
         disp.tick();
-        top_leds.tick();
+        if (dialog_open.swap(false, .acq_rel)) dialog_frames = cfg.dialog_sec * FPS;
+        top_leds.setListening(armed > 0 or dialog_frames > 0 or collect_frames > 0);
         buttons_mod.flushVolume();
         reapStream();
 
@@ -933,7 +938,6 @@ pub fn main(init: std.process.Init) !void {
             .wake => {
                 if (!wake_fired_last) playWakeSound();
                 disp.showEmotion(.def, 3 * 1000);
-                top_leds.startListening();
                 utteranceStart();
                 pauseStream();
                 armed = cfg.wait_sec * FPS;
@@ -1040,6 +1044,7 @@ pub fn main(init: std.process.Init) !void {
             stopRing();
             speaker_abort.store(true, .release);
             dialog_frames = 0;
+            dialog_open.store(false, .release);
             armed = 0;
             collect_frames = 0;
             acc.clearRetainingCapacity();
@@ -1052,7 +1057,6 @@ pub fn main(init: std.process.Init) !void {
         if (wake_rest) |rest| {
             if (!wake_fired_last) playWakeSound();
             disp.showEmotion(.def, 3 * 1000);
-            top_leds.startListening();
             pauseStream();
             if (rest.len == 0) {
                 armed = cfg.wait_sec * FPS;

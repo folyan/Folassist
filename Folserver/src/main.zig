@@ -276,7 +276,7 @@ fn emitEmotion(ctx: *anyopaque, em: protocol.Emotion) anyerror!void {
 
 fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !void {
     log("[{d}] код {d}: «{s}»", .{ s.id, @intFromEnum(op), text });
-    if (std.mem.indexOf(u8, text, "Стоп") != null or std.mem.indexOf(u8, text, "Хватит") != null) {
+    if (std.mem.indexOf(u8, text, "Стоп") != null or std.mem.indexOf(u8, text, "Хватит") != null or std.mem.indexOf(u8, text, "Столб") != null) {
         log("[{d}] перехвачен стоп, гасим звук", .{s.id});
         // Отправляем пустой ответ клиенту, чтобы он закрыл свой стрим
         try net.sendFrame(fd, .reply, &.{});
@@ -550,7 +550,7 @@ fn serveHttp(fd: c_int) !void {
             if (!ytHostOk(dec)) return httpFail(fd, "400 Bad Request");
             break :blk zfmt.bufPrintZ(&tgt_buf, "{s}", .{dec}) catch return httpFail(fd, "400 Bad Request");
         }
-        break :blk zfmt.bufPrintZ(&tgt_buf, "ytsearch1:{s}", .{dec}) catch return httpFail(fd, "400 Bad Request");
+        break :blk zfmt.bufPrintZ(&tgt_buf, "ytmsearch1:{s}", .{dec}) catch return httpFail(fd, "400 Bad Request");
     };
     if (streams.fetchAdd(1, .acq_rel) >= MAX_STREAMS) {
         _ = streams.fetchSub(1, .acq_rel);
