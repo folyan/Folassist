@@ -545,6 +545,7 @@ fn serveHttp(fd: c_int) !void {
     if (dec.len == 0) return httpFail(fd, "400 Bad Request");
 
     var tgt_buf: [600]u8 = undefined;
+    var fb_buf: [600]u8 = undefined;
     const target_z = blk: {
         if (is_url) {
             if (!ytHostOk(dec)) return httpFail(fd, "400 Bad Request");
@@ -552,6 +553,8 @@ fn serveHttp(fd: c_int) !void {
         }
         break :blk zfmt.bufPrintZ(&tgt_buf, "ytmsearch1:{s}", .{dec}) catch return httpFail(fd, "400 Bad Request");
     };
+    // запасной вариант: обычный поиск YouTube, если YouTube Music не отдал ничего
+    const fallback_z = if (is_url) target_z else (zfmt.bufPrintZ(&fb_buf, "ytsearch1:{s}", .{dec}) catch return httpFail(fd, "400 Bad Request"));
     if (streams.fetchAdd(1, .acq_rel) >= MAX_STREAMS) {
         _ = streams.fetchSub(1, .acq_rel);
         return httpFail(fd, "503 Service Unavailable");
@@ -570,10 +573,12 @@ fn serveHttp(fd: c_int) !void {
             try zfmt.bufPrintZ(&pbuf, "http://{s}", .{p});
     }
 
-    var script_buf: [384]u8 = undefined;
-    const script = try zfmt.bufPrintZ(&script_buf, "(yt-dlp -q --no-playlist ${{2:+--proxy \"$2\"}} -f bestaudio -o - -- \"$1\" | " ++
-        "ffmpeg -loglevel error -i pipe:0 -vn -f wav -ac {d} -ar {d} pipe:1) 2>/dev/null", .{ yt_channels, yt_rate });
-    const argv = [_:null]?[*:0]const u8{ "sh", "-c", script.ptr, "sh", target_z.ptr, proxy_arg.ptr };
+    var script_buf: [640]u8 = undefined;
+    // { A || B; }: если первый вариант не отдал даже заголовка (часто — устаревший yt-dlp),
+    // пробуем второй. Ошибки yt-dlp идут в stderr сервера, а не в /dev/null.
+    const script = try zfmt.bufPrintZ(&script_buf, "{{ yt-dlp -q --no-playlist ${{2:+--proxy \"$2\"}} -f bestaudio -o - -- \"$1\" || yt-dlp -q --no-playlist ${{2:+--proxy \"$2\"}} -f bestaudio -o - -- \"$3\"; }} | " ++
+        "ffmpeg -loglevel error -i pipe:0 -vn -f wav -ac {d} -ar {d} pipe:1", .{ yt_channels, yt_rate });
+    const argv = [_:null]?[*:0]const u8{ "sh", "-c", script.ptr, "sh", target_z.ptr, proxy_arg.ptr, fallback_z.ptr };
 
     const pid = c.fork();
     if (pid < 0) return error.ForkFailed;

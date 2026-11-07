@@ -1,6 +1,6 @@
 .{
     .name = .Folassist,
-    .version = "0.3.5",
+    .version = "0.3.6",
     .fingerprint = 0x1e70dc883f74678f,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
