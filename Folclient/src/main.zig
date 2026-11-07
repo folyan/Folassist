@@ -439,6 +439,7 @@ const TaskKind = enum {
     cloud_audio,
     event_alarm,
     event_reminder,
+    hello,
 };
 
 const Task = struct {
@@ -510,6 +511,26 @@ fn tryScheduleEvent(text: []const u8, audio: ?[]const u8) bool {
     return true;
 }
 
+/// Здоровается с сервером сразу при запуске, а не при первой команде. Сервер в ответ
+/// на hello шлёт update, если версия клиента устарела, поэтому ждём этот кадр коротко.
+fn helloAndCheckUpdate() void {
+    if (sock < 0) sock = connectServer() catch return;
+    setRecvTimeout(sock, 2);
+    const f = net.recvFrame(alloc, sock) catch {
+        setRecvTimeout(sock, 60);
+        return;
+    };
+    setRecvTimeout(sock, 60);
+    defer f.deinit(alloc);
+    if (f.msg_type == .update) handleUpdate(f.payload);
+}
+
+fn setRecvTimeout(fd: c_int, sec: c_long) void {
+    var tv = std.mem.zeroes(c.struct_timeval);
+    tv.tv_sec = sec;
+    _ = c.setsockopt(fd, c.SOL_SOCKET, c.SO_RCVTIMEO, &tv, @sizeOf(c.struct_timeval));
+}
+
 fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     while (true) {
         _ = c.pthread_mutex_lock(&q_mutex);
@@ -545,6 +566,7 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
                     dialog_open.store(true, .release);
                 }
             },
+            .hello => helloAndCheckUpdate(),
             .event_alarm => {
                 log("будильник сработал", .{});
                 disp.showEmotion(.what, 10 * 1000);
@@ -890,6 +912,7 @@ pub fn main(init: std.process.Init) !void {
 
     var worker_tid: c.pthread_t = undefined;
     _ = c.pthread_create(&worker_tid, null, workerLoop, null);
+    enqueueTask(.{ .kind = .hello });
 
     const test_file = try alloc.printSentinel("{s}/tokens.txt", .{cfg.model}, 0);
     defer alloc.free(test_file);
