@@ -47,12 +47,14 @@ pub fn refresh() void {
         defer alloc.free(cmd);
         if (!sh(cmd)) ok = false;
     }
+    std.debug.print("DBG refresh: tag={s} ok={any}\n", .{ ver, ok });
     if (!ok) return;
     if (latest) |old| alloc.free(old);
     latest = alloc.dupe(u8, ver) catch null;
 }
 
 pub fn offerPayload(client_ver: u8, client_asset: ?[]const u8, musl: bool) ?[]u8 {
+    std.debug.print("DBG offer: latest={?s} client_ver={d} server_app={d} asset={?s}\n", .{ latest, client_ver, app, client_asset });
     if (latest == null) return null;
     const ca = client_asset orelse return null;
     if (client_ver >= app) return null;
