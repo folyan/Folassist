@@ -15,10 +15,57 @@ pub const Color = struct {
 
 pub const INDICATOR_BRIGHTNESS: u8 = 5;
 
+// Яркость индикаторов зависит от освещённости: логарифмически от LUX_MIN_BR (темно)
+// до LUX_MAX_BR (LUX_FULL люкс и больше).
+const LUX_MIN_BR: f32 = 2;
+const LUX_MAX_BR: f32 = 60;
+const LUX_FULL: f32 = 1000;
+const LUX_POLL_MS: u64 = 5000;
+
+pub fn brightnessForLux(lux: f32) u8 {
+    const x = std.math.clamp(lux, 0, LUX_FULL);
+    const t = std.math.log10(x + 1) / std.math.log10(LUX_FULL + 1);
+    return @intFromFloat(LUX_MIN_BR + (LUX_MAX_BR - LUX_MIN_BR) * t);
+}
+
+fn readFloatFile(path: [:0]const u8) ?f32 {
+    const f = c.open(path.ptr, c.O_RDONLY);
+    if (f < 0) return null;
+    defer _ = c.close(f);
+    var buf: [32]u8 = undefined;
+    const n = c.read(f, &buf, buf.len);
+    if (n <= 0) return null;
+    const s = std.mem.trim(u8, buf[0..@intCast(n)], " \n\r\t");
+    return std.fmt.parseFloat(f32, s) catch null;
+}
+
+/// Освещённость в люксах с IIO-датчика света. Пробует both_input (лк),
+/// затем input (лк), затем clear_raw * clear_scale.
+fn readLux() ?f32 {
+    var dev: usize = 0;
+    while (dev < 8) : (dev += 1) {
+        var path_buf: [112]u8 = undefined;
+        if (zfmt.bufPrintZ(&path_buf, "/sys/bus/iio/devices/iio:device{d}/in_illuminance_both_input", .{dev})) |p| {
+            if (readFloatFile(p)) |v| return v;
+        } else |_| {}
+        if (zfmt.bufPrintZ(&path_buf, "/sys/bus/iio/devices/iio:device{d}/in_illuminance_input", .{dev})) |p| {
+            if (readFloatFile(p)) |v| return v;
+        } else |_| {}
+        const raw_p = zfmt.bufPrintZ(&path_buf, "/sys/bus/iio/devices/iio:device{d}/in_illuminance_clear_raw", .{dev}) catch continue;
+        const raw = readFloatFile(raw_p) orelse continue;
+        const scale_p = zfmt.bufPrintZ(&path_buf, "/sys/bus/iio/devices/iio:device{d}/in_illuminance_clear_scale", .{dev}) catch continue;
+        const scale = readFloatFile(scale_p) orelse continue;
+        return raw * scale;
+    }
+    return null;
+}
+
 pub const TopLeds = struct {
     muted: bool = false,
     listening: bool = false,
     has_leds: bool = false,
+    indicator_br: u8 = INDICATOR_BRIGHTNESS,
+    last_lux_ms: u64 = 0,
     state: [36]u8 = @splat(255),
     // setListening зовётся из главного цикла, а setMuted/apply — тоже оттуда, но мьютекс
     // оставлен на случай, если кто-то дернёт их из другого потока.
@@ -68,9 +115,23 @@ pub const TopLeds = struct {
     }
 
     fn currentColor(self: *const TopLeds) struct { col: Color, br: u8 } {
-        if (self.listening) return .{ .col = Color.blue, .br = INDICATOR_BRIGHTNESS };
-        if (self.muted) return .{ .col = Color.red, .br = INDICATOR_BRIGHTNESS };
+        if (self.listening) return .{ .col = Color.blue, .br = self.indicator_br };
+        if (self.muted) return .{ .col = Color.red, .br = self.indicator_br };
         return .{ .col = Color.off, .br = 0 };
+    }
+
+    /// Вызывать из главного цикла; сам опрашивает датчик раз в LUX_POLL_MS.
+    pub fn pollAmbient(self: *TopLeds) void {
+        const now = sync.nowMs();
+        if (now < self.last_lux_ms + LUX_POLL_MS) return;
+        self.last_lux_ms = now;
+        const lux = readLux() orelse return;
+        const br = brightnessForLux(lux);
+        self.lock.lock();
+        defer self.lock.unlock();
+        if (br == self.indicator_br) return;
+        self.indicator_br = br;
+        self.applyLocked();
     }
 
     pub fn apply(self: *TopLeds) void {

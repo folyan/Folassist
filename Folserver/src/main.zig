@@ -7,6 +7,7 @@ const ai = @import("ai.zig");
 const weather = @import("weather.zig");
 const tts_mod = @import("tts.zig");
 const sync = @import("sync.zig");
+const guard = @import("guard.zig");
 const update = @import("update.zig");
 const stt = @import("stt.zig");
 
@@ -428,7 +429,10 @@ fn handleConn(fd: c_int) !void {
                 const op: protocol.Op = @enumFromInt(@as(u2, @truncate(f.flags)));
                 if (op == .model_req) {
                     // запрос модели идёт без hello, пароль лежит в payload
-                    if (!passOk(f.payload)) return error.Unauthorized;
+                    if (!passOk(f.payload)) {
+                        guard.noteFail(guard.peerIp(fd));
+                        return error.Unauthorized;
+                    }
                     const p = model_archive orelse {
                         log("клиент просит модель, но --model-archive не задан", .{});
                         try net.sendFrame(fd, .model, &.{});
@@ -458,7 +462,11 @@ fn handleConn(fd: c_int) !void {
                     releaseId(s.id);
                     s.claimed = false;
                 }
-                if (!s.applyHello(f.payload, f.version, f.musl)) return error.Unauthorized;
+                if (!s.applyHello(f.payload, f.version, f.musl)) {
+                    guard.noteFail(guard.peerIp(fd));
+                    return error.Unauthorized;
+                }
+                guard.noteOk(guard.peerIp(fd));
                 const want = s.id;
                 s.id = claimId(want) orelse return error.NoFreeId;
                 s.claimed = true;
@@ -528,7 +536,10 @@ fn serveHttp(fd: c_int) !void {
     const amp = std.mem.indexOfScalar(u8, after_k, '&') orelse return httpFail(fd, "400 Bad Request");
     var k_buf: [128]u8 = undefined;
     const k = urlDecode(after_k[0..amp], &k_buf) orelse return httpFail(fd, "400 Bad Request");
-    if (!passOk(k)) return httpFail(fd, "403 Forbidden");
+    if (!passOk(k)) {
+        guard.noteFail(guard.peerIp(fd));
+        return httpFail(fd, "403 Forbidden");
+    }
     const query = after_k[amp + 1 ..];
 
     var is_url = false;
@@ -637,6 +648,10 @@ fn httpAcceptLoop(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
             _ = c.usleep(10_000);
             continue;
         }
+        if (guard.isBanned(guard.peerIp(cfd))) {
+            _ = c.close(cfd);
+            continue;
+        }
         spawn(cfd, httpThread);
     }
 }
@@ -735,6 +750,10 @@ pub fn main(init: std.process.Init) !void {
         const cfd = c.accept(lfd, null, null);
         if (cfd < 0) {
             _ = c.usleep(10_000);
+            continue;
+        }
+        if (guard.isBanned(guard.peerIp(cfd))) {
+            _ = c.close(cfd);
             continue;
         }
         spawn(cfd, connThread);

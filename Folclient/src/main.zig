@@ -981,6 +981,7 @@ pub fn main(init: std.process.Init) !void {
     while (true) {
         disp.tick();
         if (dialog_open.swap(false, .acq_rel)) dialog_frames = cfg.dialog_sec * FPS;
+        top_leds.pollAmbient();
         top_leds.setListening(armed > 0 or dialog_frames > 0 or collect_frames > 0);
         buttons_mod.flushVolume();
         reapStream();
