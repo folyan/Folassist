@@ -1,6 +1,6 @@
 .{
     .name = .Folassist,
-    .version = "0.2.14",
+    .version = "0.3.0",
     .fingerprint = 0x1e70dc883f74678f,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
@@ -9,4 +9,5 @@
 
     .paths = .{ "build.zig", "build.zig.zon", "src", "vendor" },
 }
+
 

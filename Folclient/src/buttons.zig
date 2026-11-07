@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c");
 const zfmt = @import("zfmt");
+const sync = @import("sync.zig");
 
 pub const Action = enum {
     none,
@@ -65,11 +66,45 @@ pub const Buttons = struct {
 
 pub var volume: u8 = 30;
 
+// amixer запускается в фоне и не чаще раза в VOL_APPLY_GAP_MS. Раньше тут был c.system(),
+// который блокировал главный цикл на десятки миллисекунд при каждом нажатии (а при
+// удержании кнопки — на каждый repeat), и лица/цифры на дисплее «подмигивали».
+const VOL_APPLY_GAP_MS: u64 = 120;
+var vol_dirty: bool = false;
+var vol_applied_ms: u64 = 0;
+
+fn runAmixer(v: u8) void {
+    var buf: [192]u8 = undefined;
+    const cmd = zfmt.bufPrintZ(&buf, "amixer -q sset StereoVolume {d}% >/dev/null 2>&1 || amixer -q sset Master {d}% >/dev/null 2>&1", .{ v, v }) catch return;
+    const argv = [_:null]?[*:0]const u8{ "sh", "-c", cmd.ptr };
+
+    const pid = c.fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        // двойной fork: внука усыновляет init, зомби не остаётся и ждать его не нужно
+        if (c.fork() == 0) {
+            _ = c.execv("/bin/sh", @ptrCast(&argv));
+            c._exit(127);
+        }
+        c._exit(0);
+    }
+    _ = c.waitpid(pid, null, 0);
+}
+
+/// Применяет последнюю запрошенную громкость. Зовётся каждый кадр из главного цикла.
+pub fn flushVolume() void {
+    if (!vol_dirty) return;
+    const now = sync.nowMs();
+    if (vol_applied_ms != 0 and now -| vol_applied_ms < VOL_APPLY_GAP_MS) return;
+    vol_dirty = false;
+    vol_applied_ms = now;
+    runAmixer(volume);
+}
+
 pub fn setVolume(v: u8) void {
     volume = if (v > 100) 100 else v;
-    var buf: [128]u8 = undefined;
-    const cmd = zfmt.bufPrintZ(&buf, "amixer -q sset StereoVolume {d}% >/dev/null 2>&1 || amixer -q sset Master {d}% >/dev/null 2>&1", .{ volume, volume }) catch return;
-    _ = c.system(cmd.ptr);
+    vol_dirty = true;
+    flushVolume();
 }
 
 pub fn adjustVolume(up: bool) void {
@@ -79,3 +114,4 @@ pub fn adjustVolume(up: bool) void {
         setVolume(if (volume < 5) 0 else volume - 5);
     }
 }
+

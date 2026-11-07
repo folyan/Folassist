@@ -2,6 +2,7 @@ const std = @import("std");
 const protocol = @import("protocol");
 const c = @import("c");
 const zfmt = @import("zfmt");
+const sync = @import("sync.zig");
 
 pub const Mode = enum {
     clock,
@@ -10,6 +11,15 @@ pub const Mode = enum {
 
 const MOUTH: u5 = 16;
 
+// Все времена в миллисекундах (см. sync.nowMs).
+const VOLUME_SHOW_MS: u64 = 1500;
+const BLINK_EVERY_MS: u64 = 3500;
+const BLINK_LEN_MS: u64 = 140;
+pub const FOREVER_MS: u64 = std.math.maxInt(u64) / 2;
+
+/// Какой глаз у «what» (непонимание) двойной высоты. Второй глаз как у def.
+const WHAT_TALL_EYE: u1 = 0; // 0 = левый (H1), 1 = правый (M2)
+
 pub const Display = struct {
     brightness: u8 = 120,
     default_brightness: u8 = 120,
@@ -17,17 +27,18 @@ pub const Display = struct {
 
     mode: Mode = .clock,
     current_emotion: protocol.Emotion = .def,
-    emotion_frames_left: u32 = 0,
-
-    blink_timer: u32 = 20,
-    blinking: bool = false,
+    emotion_until_ms: u64 = 0,
+    blink_phase_ms: u64 = 0,
 
     current_mask: u32 = 0,
     written: [30]u8 = @splat(255),
     has_leds: bool = false,
 
-    vol_frames_left: u32 = 0,
+    vol_until_ms: u64 = 0,
     vol_value: u8 = 0,
+
+    // showEmotion зовут из потока-обработчика ответов, tick — из главного цикла.
+    lock: sync.Mutex = .{},
 
     pub fn init(default_br: u8) Display {
         var d = Display{
@@ -41,33 +52,48 @@ pub const Display = struct {
     }
 
     pub fn setNightMode(self: *Display, enable: bool) void {
+        self.lock.lock();
+        defer self.lock.unlock();
         self.night_mode = enable;
         self.brightness = if (enable) 5 else self.default_brightness;
         self.forceRedraw();
     }
 
-    pub fn showEmotion(self: *Display, em: protocol.Emotion, duration_sec: u32) void {
+    /// Показать эмоцию на duration_ms. Рисуется сразу, не дожидаясь следующего tick.
+    pub fn showEmotion(self: *Display, em: protocol.Emotion, duration_ms: u64) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const now = sync.nowMs();
         self.current_emotion = em;
         self.mode = .emotion;
-        self.emotion_frames_left = duration_sec * 4;
-        self.forceRedraw();
+        self.emotion_until_ms = now +| duration_ms;
+        if (self.blink_phase_ms == 0) self.blink_phase_ms = now;
+        if (self.vol_until_ms <= now) self.draw(now);
     }
 
     pub fn showVolume(self: *Display, v: u8) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const now = sync.nowMs();
         self.vol_value = v;
-        self.vol_frames_left = 6;
+        self.vol_until_ms = now + VOLUME_SHOW_MS;
+        self.draw(now);
     }
 
     pub fn toggleFaceOrClock(self: *Display) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const now = sync.nowMs();
         if (self.mode == .clock) {
             self.mode = .emotion;
             self.current_emotion = .def;
-            self.emotion_frames_left = std.math.maxInt(u32);
+            self.emotion_until_ms = FOREVER_MS;
+            self.blink_phase_ms = now;
         } else {
             self.mode = .clock;
-            self.emotion_frames_left = 0;
+            self.emotion_until_ms = 0;
         }
-        self.forceRedraw();
+        self.draw(now);
     }
 
     fn forceRedraw(self: *Display) void {
@@ -228,58 +254,51 @@ pub const Display = struct {
     }
 
     pub fn tick(self: *Display) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.draw(sync.nowMs());
+    }
+
+    fn isBlinking(self: *const Display, now: u64) bool {
+        const t = (now -| self.blink_phase_ms) % (BLINK_EVERY_MS + BLINK_LEN_MS);
+        return t >= BLINK_EVERY_MS;
+    }
+
+    fn eyesMask(self: *const Display, blinking: bool) u32 {
+        if (blinking) {
+            // моргание: у всех эмоций глаза схлопываются в нижнюю/среднюю чёрточку
+            if (self.current_emotion == .happy) return ledBit(25) | ledBit(10);
+            return ledBit(18) | ledBit(15);
+        }
+        const def_l = ledBit(22) | ledBit(18) | ledBit(23) | ledBit(25);
+        const def_r = ledBit(12) | ledBit(15) | ledBit(14) | ledBit(10);
+        return switch (self.current_emotion) {
+            .def => def_l | def_r,
+            .happy => ledBit(30) | ledBit(2) | ledBit(29) | ledBit(9) | ledBit(11) | ledBit(13),
+            .sad => ledBit(22) | ledBit(18) | ledBit(14) | ledBit(15),
+            // непонимание: один глаз в 2 высоты (целая «8»), второй как у def
+            .what => if (WHAT_TALL_EYE == H1)
+                (eyeRing(H1) | ledBit(25)) | def_r
+            else
+                def_l | (eyeRing(M2) | ledBit(10)),
+        };
+    }
+
+    /// Рисует текущее состояние. Вызывать только под self.lock.
+    fn draw(self: *Display, now: u64) void {
         if (!self.has_leds) return;
 
-        if (self.vol_frames_left > 0) {
-            self.vol_frames_left -= 1;
+        if (self.vol_until_ms > now) {
             self.applyMask(volumeMask(self.vol_value));
             return;
         }
 
-        if (self.mode == .emotion) {
-            if (self.blink_timer > 0) {
-                self.blink_timer -= 1;
-            } else {
-                self.blinking = !self.blinking;
-                self.blink_timer = if (self.blinking) 1 else 20;
-            }
-            if (self.emotion_frames_left > 0) {
-                self.emotion_frames_left -= 1;
-            } else {
-                self.mode = .clock;
-                self.blinking = false;
-            }
-        } else {
-            self.blinking = false;
+        if (self.mode == .emotion and now >= self.emotion_until_ms) {
+            self.mode = .clock;
         }
 
         if (self.mode == .emotion) {
-            var mask: u32 = ledBit(MOUTH);
-            if (self.blinking) {
-                if (self.current_emotion == .happy) {
-                    mask |= ledBit(25) | ledBit(10);
-                } else {
-                    mask |= ledBit(18) | ledBit(15);
-                }
-            } else switch (self.current_emotion) {
-                .def => {
-                    mask |= ledBit(22) | ledBit(18) | ledBit(23) | ledBit(25);
-                    mask |= ledBit(12) | ledBit(15) | ledBit(14) | ledBit(10);
-                },
-                .happy => {
-                    mask |= ledBit(30) | ledBit(2) | ledBit(29);
-                    mask |= ledBit(9) | ledBit(11) | ledBit(13);
-                },
-                .sad => {
-                    mask |= ledBit(22) | ledBit(18);
-                    mask |= ledBit(14) | ledBit(15);
-                },
-                .what => {
-                    mask |= eyeRing(H1) | ledBit(25);
-                    mask |= eyeRing(M2) | ledBit(10);
-                },
-            }
-            self.applyMask(mask);
+            self.applyMask(ledBit(MOUTH) | self.eyesMask(self.isBlinking(now)));
             return;
         }
 

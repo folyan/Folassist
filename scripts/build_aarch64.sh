@@ -107,3 +107,4 @@ $STRIP --strip-all "$ROOT/out/$OUT_NAME"
 file "$ROOT/out/$OUT_NAME" || true
 cp zig-out/bin/folwatchdog "$ROOT/out/${OUT_NAME/folclient/folwatchdog}"
 $STRIP --strip-all "$ROOT/out/${OUT_NAME/folclient/folwatchdog}"
+

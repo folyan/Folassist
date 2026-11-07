@@ -56,3 +56,4 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(watchdog);
 }
+

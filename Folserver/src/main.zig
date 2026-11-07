@@ -197,6 +197,12 @@ fn speak(fd: c_int, text: []const u8) !void {
     return speakF(fd, text, 0);
 }
 
+/// Сначала сразу шлём кадр с эмоцией (лицо меняется до озвучки), потом саму фразу.
+fn speakEm(fd: c_int, text: []const u8, em: protocol.Emotion) !void {
+    try net.sendFrameF(fd, .reply, protocol.setEmotion(protocol.REPLY_MORE, em), &.{});
+    return speakF(fd, text, protocol.setEmotion(0, em));
+}
+
 fn youtubeQuery(text: []const u8, out: []u8) ?[]const u8 {
     var start: usize = 0;
     if (std.mem.indexOf(u8, text, "включи")) |i| {
@@ -257,8 +263,15 @@ const StreamCtx = struct {
 fn emitSentence(ctx: *anyopaque, sentence: []const u8) anyerror!void {
     const sc: *StreamCtx = @ptrCast(@alignCast(ctx));
     log("[stream] «{s}»", .{sentence});
-    try speakF(sc.fd, sentence, protocol.REPLY_MORE);
+    // эмоция в каждом кадре: клиент не должен откатываться на def между предложениями
+    try speakF(sc.fd, sentence, protocol.setEmotion(protocol.REPLY_MORE, sc.emotion));
     sc.sent = true;
+}
+
+fn emitEmotion(ctx: *anyopaque, em: protocol.Emotion) anyerror!void {
+    const sc: *StreamCtx = @ptrCast(@alignCast(ctx));
+    log("[stream] эмоция {s}", .{@tagName(em)});
+    try net.sendFrameF(sc.fd, .reply, protocol.setEmotion(protocol.REPLY_MORE, em), &.{});
 }
 
 fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !void {
@@ -273,7 +286,7 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
     if (op == .music) {
         var qbuf: [256]u8 = undefined;
         const q = youtubeQuery(text, &qbuf) orelse {
-            return speak(fd, "Не понял, что включить.");
+            return speakEm(fd, "Не понял, что включить.", .what);
         };
         var path: std.ArrayList(u8) = .empty;
         defer path.deinit(alloc);
@@ -288,7 +301,7 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
     if (op == .ai) {
         if (text.len == 0) return net.sendFrame(fd, .reply, &.{});
         var sc: StreamCtx = .{ .fd = fd };
-        const sink = ai.Sink{ .ctx = &sc, .emit = emitSentence };
+        const sink = ai.Sink{ .ctx = &sc, .emit = emitSentence, .emotion = emitEmotion };
         const cp: ?[]const u8 = if (s.prompt) |p| p else null;
         const res: anyerror![]u8 = blk: {
             var kbuf: [stt.MAX_KEYS][]const u8 = undefined;
@@ -315,8 +328,7 @@ fn handleCmd(fd: c_int, s: *const Session, op: protocol.Op, text: []const u8) !v
             if (sc.sent) {
                 try net.sendFrame(fd, .reply, &.{});
             } else {
-                const flags = protocol.setEmotion(0, .sad);
-                try speakF(fd, "Не удалось получить ответ.", flags);
+                try speakEm(fd, "Не удалось получить ответ.", .sad);
             }
         }
         return;
@@ -382,12 +394,12 @@ fn handleAudio(fd: c_int, s: *const Session, flags: u8, pcm: []const u8) !void {
     const forced_ai = (flags & 0b11) == @intFromEnum(protocol.Op.ai);
     const raw = stt.transcribe(pcm) catch |e| {
         log("[{d}] распознавание: {s}", .{ s.id, @errorName(e) });
-        return speak(fd, "Не получилось распознать.");
+        return speakEm(fd, "Не получилось распознать.", .sad);
     };
     defer alloc.free(raw);
     const text = stt.stripWake(std.mem.trim(u8, raw, " .,!?"));
     log("[{d}] облако услышало: «{s}»", .{ s.id, text });
-    if (text.len == 0) return speak(fd, "Не расслышала.");
+    if (text.len == 0) return speakEm(fd, "Не расслышала.", .what);
     const op: protocol.Op = if (forced_ai) .ai else classify(text);
     return handleCmd(fd, s, op, text);
 }
@@ -723,3 +735,4 @@ pub fn main(init: std.process.Init) !void {
         spawn(cfd, connThread);
     }
 }
+

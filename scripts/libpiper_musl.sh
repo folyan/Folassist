@@ -12,3 +12,4 @@ git clone https://github.com/OHF-voice/piper1-gpl.git piper && git -C piper chec
 cmake -S piper/libpiper -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/prefix" -DONNXRUNTIME_DIR="$PWD/ort"
 cmake --build build -j"$(nproc)"
 cmake --install build
+

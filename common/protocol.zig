@@ -206,3 +206,4 @@ pub fn Net(comptime C: type) type {
         }
     };
 }
+

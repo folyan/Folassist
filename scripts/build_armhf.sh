@@ -109,3 +109,4 @@ $STRIP --strip-all "$ROOT/out/folclient-armhf"
 file "$ROOT/out/folclient-armhf" || true
 cp zig-out/bin/folwatchdog "$ROOT/out/folwatchdog-armhf"
 $STRIP --strip-all "$ROOT/out/folwatchdog-armhf"
+

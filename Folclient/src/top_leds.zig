@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c");
 const zfmt = @import("zfmt");
+const sync = @import("sync.zig");
 
 pub const Color = struct {
     r: u8,
@@ -13,14 +14,17 @@ pub const Color = struct {
 };
 
 pub const INDICATOR_BRIGHTNESS: u8 = 5;
-const FRAMES_PER_SEC: u32 = 4;
-const LISTEN_MAX_SEC: u32 = 10;
+// Время в миллисекундах: раньше тут были «кадры по 4 в секунду», а tick() зовут 25 раз
+// в секунду, поэтому синий индикатор гас через 1.6 с вместо 10.
+const LISTEN_MAX_MS: u64 = 10_000;
 
 pub const TopLeds = struct {
     muted: bool = false,
-    listen_frames: u32 = 0,
+    listen_until_ms: u64 = 0,
     has_leds: bool = false,
     state: [36]u8 = @splat(255),
+    // startListening/stopListening зовёт поток-обработчик, tick/apply — главный цикл.
+    lock: sync.Mutex = .{},
 
     pub fn init() TopLeds {
         var tl = TopLeds{};
@@ -32,25 +36,33 @@ pub const TopLeds = struct {
     }
 
     pub fn setMuted(self: *TopLeds, mute: bool) void {
+        self.lock.lock();
+        defer self.lock.unlock();
         self.muted = mute;
-        self.apply();
+        self.applyLocked();
     }
 
     pub fn startListening(self: *TopLeds) void {
-        self.listen_frames = LISTEN_MAX_SEC * FRAMES_PER_SEC;
-        self.apply();
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.listen_until_ms = sync.nowMs() + LISTEN_MAX_MS;
+        self.applyLocked();
     }
 
     pub fn stopListening(self: *TopLeds) void {
-        if (self.listen_frames == 0) return;
-        self.listen_frames = 0;
-        self.apply();
+        self.lock.lock();
+        defer self.lock.unlock();
+        if (self.listen_until_ms == 0) return;
+        self.listen_until_ms = 0;
+        self.applyLocked();
     }
 
     pub fn tick(self: *TopLeds) void {
-        if (self.listen_frames > 0) {
-            self.listen_frames -= 1;
-            if (self.listen_frames == 0) self.apply();
+        self.lock.lock();
+        defer self.lock.unlock();
+        if (self.listen_until_ms != 0 and sync.nowMs() >= self.listen_until_ms) {
+            self.listen_until_ms = 0;
+            self.applyLocked();
         }
     }
 
@@ -72,12 +84,18 @@ pub const TopLeds = struct {
     }
 
     fn currentColor(self: *const TopLeds) struct { col: Color, br: u8 } {
-        if (self.listen_frames > 0) return .{ .col = Color.blue, .br = INDICATOR_BRIGHTNESS };
+        if (self.listen_until_ms != 0) return .{ .col = Color.blue, .br = INDICATOR_BRIGHTNESS };
         if (self.muted) return .{ .col = Color.red, .br = INDICATOR_BRIGHTNESS };
         return .{ .col = Color.off, .br = 0 };
     }
 
     pub fn apply(self: *TopLeds) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.applyLocked();
+    }
+
+    fn applyLocked(self: *TopLeds) void {
         if (!self.has_leds) return;
 
         const cur = self.currentColor();
@@ -97,3 +115,4 @@ pub const TopLeds = struct {
         }
     }
 };
+

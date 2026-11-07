@@ -70,3 +70,4 @@ pub fn threadMain(_: ?*anyopaque) callconv(.c) ?*anyopaque {
         _ = c.sleep(6 * 3600);
     }
 }
+

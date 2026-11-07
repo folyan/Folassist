@@ -24,3 +24,4 @@ pub fn readFile(comptime C: type, allocator: std.mem.Allocator, path: []const u8
     }
     return out.toOwnedSlice(allocator);
 }
+

@@ -88,7 +88,26 @@ fn closeFd(fd: c_int) void {
 pub const Sink = struct {
     ctx: *anyopaque,
     emit: *const fn (ctx: *anyopaque, sentence: []const u8) anyerror!void,
+    /// Зовётся один раз, как только из потока стало известно настроение ответа
+    /// (метка [xx] идёт первой), то есть ДО озвучки первого предложения.
+    emotion: ?*const fn (ctx: *anyopaque, em: protocol.Emotion) anyerror!void = null,
 };
+
+fn emotionFromTag(tag: []const u8) protocol.Emotion {
+    if (std.mem.eql(u8, tag, "01")) return .happy;
+    if (std.mem.eql(u8, tag, "10")) return .sad;
+    if (std.mem.eql(u8, tag, "11")) return .what;
+    return .def;
+}
+
+/// Пытается определить эмоцию по началу ответа. true, если решение принято
+/// (метка найдена, либо уже ясно, что её нет). final = поток закончился.
+fn detectEmotion(full: []const u8, final: bool, out: *protocol.Emotion) bool {
+    const t = std.mem.trimStart(u8, full, " \r\n\t");
+    if (t.len < 4 and !final) return false;
+    out.* = if (isEmotionTag(t)) emotionFromTag(t[1..3]) else .def;
+    return true;
+}
 
 const StreamChunk = struct {
     choices: []const struct {
@@ -250,6 +269,7 @@ pub fn askStream(allocator: std.mem.Allocator, client_id: u8, query: []const u8,
     defer full.deinit(allocator);
     var pending: std.ArrayList(u8) = .empty;
     defer pending.deinit(allocator);
+    var emotion_known = false;
 
     var line_buf: [8192]u8 = undefined;
     while (c.fgets(&line_buf, @intCast(line_buf.len), pipe) != null) {
@@ -265,23 +285,20 @@ pub fn askStream(allocator: std.mem.Allocator, client_id: u8, query: []const u8,
 
         try full.appendSlice(allocator, piece);
         try pending.appendSlice(allocator, piece);
+        if (!emotion_known and detectEmotion(full.items, false, emotion_out)) {
+            emotion_known = true;
+            if (sink.emotion) |cb| try cb(sink.ctx, emotion_out.*);
+        }
         try flushChunks(allocator, &pending, sink);
     }
 
-    if (pending.items.len > 0) try emitPart(allocator, pending.items, sink);
     if (full.items.len == 0) return error.EmptyReply;
-    const full_trim = std.mem.trimStart(u8, full.items, " \r\n\t");
-    if (isEmotionTag(full_trim)) {
-        const tag = full_trim[1..3];
-        emotion_out.* = if (std.mem.eql(u8, tag, "01"))
-            .happy
-        else if (std.mem.eql(u8, tag, "10"))
-            .sad
-        else if (std.mem.eql(u8, tag, "11"))
-            .what
-        else
-            .def;
+    if (!emotion_known) {
+        // очень короткий ответ: метку ещё не успели разобрать
+        _ = detectEmotion(full.items, true, emotion_out);
+        if (sink.emotion) |cb| try cb(sink.ctx, emotion_out.*);
     }
+    if (pending.items.len > 0) try emitPart(allocator, pending.items, sink);
 
     const cleaned = try cleanForTts(allocator, full.items);
     errdefer allocator.free(cleaned);
@@ -304,3 +321,4 @@ pub fn askStream(allocator: std.mem.Allocator, client_id: u8, query: []const u8,
     }
     return cleaned;
 }
+

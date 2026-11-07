@@ -103,6 +103,11 @@ fn log(comptime fmt: []const u8, args: anytype) void {
     std.debug.print("[folclient] " ++ fmt ++ "\n", args);
 }
 
+// «Стоп» приходит из главного потока, а играет рабочий. Закрывать ALSA-handle из чужого
+// потока нельзя (use-after-close, плюс drain блокировал главный цикл до конца фразы),
+// поэтому главный поток только поднимает флаг, а Speaker сам обрывает вывод через drop.
+var speaker_abort = std.atomic.Value(bool).init(false);
+
 const Speaker = struct {
     handle: ?*c.snd_pcm_t = null,
     rate: u32 = 0,
@@ -117,15 +122,23 @@ const Speaker = struct {
     }
 
     fn write(self: *Speaker, rate: u32, pcm: []const u8) void {
+        if (speaker_abort.load(.acquire)) return;
         if (self.handle != null and self.rate != rate) self.close();
         if (self.handle == null) self.open(rate) catch return;
         const h = self.handle.?;
 
+        // пишем кусками по ~100 мс, чтобы между ними видеть флаг «стоп»
+        const chunk: usize = @max(@as(usize, rate / 10), 160);
         const total = pcm.len / 2;
         var off: usize = 0;
         var failures: u32 = 0;
         while (off < total) {
-            const r = c.snd_pcm_writei(h, pcm.ptr + off * 2, total - off);
+            if (speaker_abort.load(.acquire)) {
+                _ = c.snd_pcm_drop(h);
+                return;
+            }
+            const n = @min(total - off, chunk);
+            const r = c.snd_pcm_writei(h, pcm.ptr + off * 2, n);
             if (r < 0) {
                 failures += 1;
                 if (failures > 20 or c.snd_pcm_recover(h, @intCast(r), 1) < 0) return;
@@ -138,7 +151,11 @@ const Speaker = struct {
 
     fn close(self: *Speaker) void {
         const h = self.handle orelse return;
-        _ = c.snd_pcm_drain(h);
+        if (speaker_abort.load(.acquire)) {
+            _ = c.snd_pcm_drop(h);
+        } else {
+            _ = c.snd_pcm_drain(h);
+        }
         _ = c.snd_pcm_close(h);
         self.handle = null;
     }
@@ -317,13 +334,26 @@ fn closeSock() void {
     sock = -1;
 }
 
+// Эмоция держится всё время ответа (а не 5 секунд с момента первого кадра),
+// после конца ответа остаётся ещё немного.
+const REPLY_PIN_MS: u64 = 60_000;
+const REPLY_TAIL_MS: u64 = 4_000;
+
 fn readReplies(played: *bool) !void {
+    var last_emotion: protocol.Emotion = .def;
+    var shown = false;
+    defer if (shown) disp.showEmotion(last_emotion, REPLY_TAIL_MS);
+
     while (true) {
         const f = try net.recvFrame(alloc, sock);
         switch (f.msg_type) {
             .reply => {
+                // Эмоция идёт в самом первом кадре (сервер шлёт его до озвучки),
+                // так что лицо меняется сразу, а не после того, как ИИ договорил.
                 const emotion = protocol.getEmotion(f.flags);
-                disp.showEmotion(emotion, 5);
+                last_emotion = emotion;
+                shown = true;
+                disp.showEmotion(emotion, REPLY_PIN_MS);
 
                 if (f.payload.len > 4) {
                     const rate = std.mem.readInt(u32, f.payload[0..4], .little);
@@ -351,6 +381,7 @@ fn askServer(op: protocol.Op, text: []const u8, played: *bool) !void {
     if (sock < 0) sock = try connectServer();
     errdefer closeSock();
     defer speaker.close();
+    speaker_abort.store(false, .release);
     try net.sendFrameF(sock, .cmd, @intFromEnum(op), &.{text});
     try readReplies(played);
 }
@@ -359,6 +390,7 @@ fn askAudio(flags: u8, pcm: []const u8, played: *bool, sent: *bool) !void {
     if (sock < 0) sock = try connectServer();
     errdefer closeSock();
     defer speaker.close();
+    speaker_abort.store(false, .release);
     try net.sendFrameF(sock, .cmd, flags, &.{pcm});
     sent.* = true;
     try readReplies(played);
@@ -433,13 +465,13 @@ fn handleCommand(cmd: []const u8, force_ai: bool) void {
     if (std.mem.indexOf(u8, cmd, "ночной режим") != null) {
         if (std.mem.indexOf(u8, cmd, "выключи") != null or std.mem.indexOf(u8, cmd, "отключи") != null) {
             disp.setNightMode(false);
-            disp.showEmotion(.happy, 3);
+            disp.showEmotion(.happy, 3 * 1000);
             log("ночной режим выключен", .{});
             playWakeSound();
             return;
         } else {
             disp.setNightMode(true);
-            disp.showEmotion(.happy, 3);
+            disp.showEmotion(.happy, 3 * 1000);
             log("ночной режим включен", .{});
             playWakeSound();
             return;
@@ -483,12 +515,12 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
             },
             .event_alarm => {
                 log("будильник сработал", .{});
-                disp.showEmotion(.what, 10);
+                disp.showEmotion(.what, 10 * 1000);
                 startRing();
             },
             .event_reminder => {
                 log("напоминание сработало", .{});
-                disp.showEmotion(.happy, 6);
+                disp.showEmotion(.happy, 6 * 1000);
                 if (cfg.remind_sound) |s| {
                     playFile(s);
                 } else if (cachedEntry("Напоминаю")) |e| {
@@ -635,7 +667,7 @@ fn checkPartialWake(rec: *const c.SherpaOnnxOnlineRecognizer, stream: *const c.S
         const p = std.mem.trim(u8, text, " ");
         if (commandAfterWake(p) != null) {
             wake_fired = true;
-            disp.showEmotion(.def, 3);
+            disp.showEmotion(.def, 3 * 1000);
             top_leds.startListening();
             utteranceStart();
             pauseStream();
@@ -878,13 +910,13 @@ pub fn main(init: std.process.Init) !void {
     while (true) {
         disp.tick();
         top_leds.tick();
-        top_leds.apply();
+        buttons_mod.flushVolume();
         reapStream();
 
         switch (btns.poll()) {
             .wake => {
                 if (!wake_fired_last) playWakeSound();
-                disp.showEmotion(.def, 3);
+                disp.showEmotion(.def, 3 * 1000);
                 top_leds.startListening();
                 utteranceStart();
                 pauseStream();
@@ -902,9 +934,9 @@ pub fn main(init: std.process.Init) !void {
                 mic_muted = !mic_muted;
                 top_leds.setMuted(mic_muted);
                 if (mic_muted) {
-                    disp.showEmotion(.sad, 5);
+                    disp.showEmotion(.sad, 5 * 1000);
                 } else {
-                    disp.showEmotion(.happy, 2);
+                    disp.showEmotion(.happy, 2 * 1000);
                     playWakeSound();
                 }
             },
@@ -998,7 +1030,7 @@ pub fn main(init: std.process.Init) !void {
             log("мгновенный стоп!", .{});
             stopStream();
             stopRing();
-            speaker.close();
+            speaker_abort.store(true, .release);
             dialog_frames = 0;
             armed = 0;
             collect_frames = 0;
@@ -1011,7 +1043,7 @@ pub fn main(init: std.process.Init) !void {
         var phrase_ai = false;
         if (wake_rest) |rest| {
             if (!wake_fired_last) playWakeSound();
-            disp.showEmotion(.def, 3);
+            disp.showEmotion(.def, 3 * 1000);
             top_leds.startListening();
             pauseStream();
             if (rest.len == 0) {
@@ -1034,3 +1066,4 @@ pub fn main(init: std.process.Init) !void {
         collect_frames = cfg.collect_sec * FPS;
     }
 }
+

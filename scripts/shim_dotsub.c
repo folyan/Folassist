@@ -8,3 +8,4 @@ void sdotsub_(const int *n, const float *x, const int *incx, const float *y, con
 void ddotsub_(const int *n, const double *x, const int *incx, const double *y, const int *incy, double *res) {
     *res = ddot_(n, x, incx, y, incy);
 }
+
