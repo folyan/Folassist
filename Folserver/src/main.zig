@@ -499,7 +499,7 @@ fn httpFail(fd: c_int, status: []const u8) void {
 
 fn serveUpdate(fd: c_int, name: []const u8) !void {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null or std.mem.indexOf(u8, name, "..") != null) return httpFail(fd, "404 Not Found");
-    const p = try std.fmt.allocPrintSentinel(alloc, "{s}/{s}", .{ update.DIR, name }, 0);
+    const p = update.assetPath(name) orelse return httpFail(fd, "404 Not Found");
     defer alloc.free(p);
     const data = zfmt.readFile(c, alloc, p) catch return httpFail(fd, "404 Not Found");
     defer alloc.free(data);

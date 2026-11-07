@@ -107,7 +107,29 @@ fn log(comptime fmt: []const u8, args: anytype) void {
 var speaker_abort = std.atomic.Value(bool).init(false);
 // До какого момента (мс, монотонные) динамик играет ответ ассистента. Пока это так,
 // микрофон слышит свой же голос: такие куски распознавания отбрасываются.
-var speaking_until = std.atomic.Value(u64).init(0);
+// На armhf 64-битные атомики не поддерживаются, поэтому тут обычный мьютекс.
+var speaking_lock: sync.Mutex = .{};
+var speaking_until: u64 = 0;
+
+fn extendSpeaking(dur_ms: u64) void {
+    speaking_lock.lock();
+    defer speaking_lock.unlock();
+    const now = sync.nowMs();
+    const start = if (speaking_until > now) speaking_until else now;
+    speaking_until = start + dur_ms + 400;
+}
+
+fn speakingNow() bool {
+    speaking_lock.lock();
+    defer speaking_lock.unlock();
+    return sync.nowMs() < speaking_until;
+}
+
+fn stopSpeakingWindow() void {
+    speaking_lock.lock();
+    defer speaking_lock.unlock();
+    speaking_until = 0;
+}
 
 const Speaker = struct {
     handle: ?*c.snd_pcm_t = null,
@@ -124,13 +146,7 @@ const Speaker = struct {
 
     fn write(self: *Speaker, rate: u32, pcm: []const u8) void {
         if (speaker_abort.load(.acquire)) return;
-        {
-            const dur_ms: u64 = (@as(u64, pcm.len / 2) * 1000) / @as(u64, rate);
-            const now = sync.nowMs();
-            const prev = speaking_until.load(.acquire);
-            const start = if (prev > now) prev else now;
-            speaking_until.store(start + dur_ms + 400, .release);
-        }
+        extendSpeaking((@as(u64, pcm.len / 2) * 1000) / @as(u64, rate));
         if (self.handle != null and self.rate != rate) self.close();
         if (self.handle == null) self.open(rate) catch return;
         const h = self.handle.?;
@@ -1064,7 +1080,7 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        const echo_now = sync.nowMs() < speaking_until.load(.acquire);
+        const echo_now = speakingNow();
         if (echo_was and !echo_now) c.SherpaOnnxOnlineStreamReset(rec, stream);
         echo_was = echo_now;
 
@@ -1099,7 +1115,7 @@ pub fn main(init: std.process.Init) !void {
                 continue;
             }
             speaker_abort.store(true, .release);
-            speaking_until.store(0, .release);
+            stopSpeakingWindow();
         }
 
         var piece: []const u8 = undefined;
