@@ -12,11 +12,14 @@ pub const Mutex = struct {
     }
 };
 
-/// Монотонные миллисекунды. Все тайминги дисплея и светодиодов считаются от них,
-/// а не от числа кадров: цикл микрофона крутится на 25 FPS, и «кадры» как единица
-/// времени уже один раз привели к тому, что эмоции и громкость показывались в 6 раз короче.
+// translate-c делает struct timespec opaque, поэтому объявляем clock_gettime сами.
+// Раскладка timespec на linux/aarch64 (musl): два long — секунды и наносекунды.
+const CLOCK_MONOTONIC: c_int = 1;
+extern "c" fn clock_gettime(clk: c_int, ts: *[2]c_long) c_int;
+
+/// Монотонные миллисекунды. Все тайминги дисплея, светодиодов и громкости считаются от них.
 pub fn nowMs() u64 {
-    var ts: c.struct_timespec = undefined;
-    _ = c.clock_gettime(@intCast(c.CLOCK_MONOTONIC), &ts);
-    return @as(u64, @intCast(ts.tv_sec)) * 1000 + @as(u64, @intCast(ts.tv_nsec)) / 1_000_000;
+    var ts: [2]c_long = .{ 0, 0 };
+    _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+    return @as(u64, @intCast(ts[0])) * 1000 + @as(u64, @intCast(ts[1])) / 1_000_000;
 }

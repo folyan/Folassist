@@ -399,7 +399,7 @@ fn handleAudio(fd: c_int, s: *const Session, flags: u8, pcm: []const u8) !void {
     defer alloc.free(raw);
     const text = stt.stripWake(std.mem.trim(u8, raw, " .,!?"));
     log("[{d}] облако услышало: «{s}»", .{ s.id, text });
-    if (text.len == 0) return speakEm(fd, "Не расслышала.", .what);
+    if (text.len == 0) return speakEm(fd, "Не расслышал.", .what);
     const op: protocol.Op = if (forced_ai) .ai else classify(text);
     return handleCmd(fd, s, op, text);
 }

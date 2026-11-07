@@ -17,9 +17,7 @@ const RATE: u32 = 16000;
 const FRAME: usize = 640; 
 const FPS: u32 = 25; // 1000ms / 40ms = 25 кадров в секунду
 const GATE_HOLD_FRAMES: u32 = 25;
-const MAX_UTT_BYTES: usize = 16000 * 2 * 30;
 const UTT_MAX_BYTES: usize = 16000 * 2 * 10;
-const REMINDER_WAIT_SEC: i64 = 30;
 
 extern "c" fn signal(sig: c_int, handler: usize) usize;
 
@@ -61,7 +59,6 @@ var btns: buttons_mod.Buttons = undefined;
 var mic_muted: bool = false;
 
 var client_prompt: ?[]u8 = null;
-var saved_argv: []?[*:0]const u8 = &.{};
 
 var stop_buf: [16][]const u8 = undefined;
 var stop_count: usize = 0;
@@ -487,6 +484,22 @@ fn handleCommand(cmd: []const u8, force_ai: bool) void {
     }
 }
 
+/// Если фраза — будильник или напоминание, ставит его в events и возвращает true.
+/// Для напоминания нужна сама запись голоса (audio): её же потом и проиграем.
+fn tryScheduleEvent(text: []const u8, audio: ?[]const u8) bool {
+    const p = events.parseCommand(text) orelse return false;
+    switch (p.kind) {
+        .alarm => events.addAlarm(p.at),
+        .reminder => {
+            const a = audio orelse return false;
+            events.addReminder(p.at, a);
+        },
+    }
+    log("запланировано: {s} на {d}", .{ @tagName(p.kind), p.at });
+    disp.showEmotion(.happy, 2 * 1000);
+    return true;
+}
+
 fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     while (true) {
         _ = c.pthread_mutex_lock(&q_mutex);
@@ -499,12 +512,19 @@ fn workerLoop(_: ?*anyopaque) callconv(.c) ?*anyopaque {
         switch (task.kind) {
             .command => {
                 if (task.text) |t| {
-                    handleCommand(t, task.force_ai);
+                    if (!tryScheduleEvent(t, null)) handleCommand(t, task.force_ai);
                     alloc.free(t);
                 }
             },
             .cloud_audio => {
                 if (task.audio) |a| {
+                    if (task.text) |t| {
+                        if (tryScheduleEvent(t, a)) {
+                            alloc.free(a);
+                            alloc.free(t);
+                            continue;
+                        }
+                    }
                     const sent = cloudCommand(a, task.force_ai);
                     if (!sent and task.text != null) {
                         handleCommand(task.text.?, task.force_ai);
@@ -768,10 +788,6 @@ fn fetchModel() !void {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const argv_c = try alloc.alloc(?[*:0]const u8, args.len + 1);
-    for (args, 0..) |a, i| argv_c[i] = a.ptr;
-    argv_c[args.len] = null;
-    saved_argv = argv_c;
 
     for (args[1..]) |arg| {
         if (val(arg, "--id")) |v| {
@@ -835,6 +851,9 @@ pub fn main(init: std.process.Init) !void {
             cfg.dialog_sec = std.fmt.parseInt(u32, v, 10) catch cfg.dialog_sec;
         }
     }
+
+    if (cfg.store) |sp| events.store_path = sp;
+    events.load();
 
     disp = display_mod.Display.init(cfg.brightness);
     top_leds = top_leds_mod.TopLeds.init();
@@ -902,9 +921,6 @@ pub fn main(init: std.process.Init) !void {
     var acc: std.ArrayList(u8) = .empty;
     var acc_force_ai = false;
     var collect_frames: u32 = 0;
-    var utt: std.ArrayList(u8) = .empty;
-    var pending_reminder: ?i64 = null;
-    const reminder_deadline: i64 = 0;
     var gate_hold: u32 = 0;
 
     while (true) {
@@ -961,10 +977,6 @@ pub fn main(init: std.process.Init) !void {
 
         if (armed > 0) armed -= 1;
         if (dialog_frames > 0) dialog_frames -= 1;
-        if (pending_reminder != null) {
-            utt.appendSlice(alloc, std.mem.sliceAsBytes(&buf)) catch {};
-            if (utt.items.len > MAX_UTT_BYTES) utt.clearRetainingCapacity();
-        }
 
         if (events.popDue(events.now())) |ev| {
             switch (ev.kind) {
@@ -976,10 +988,6 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        if (pending_reminder != null and events.now() > reminder_deadline) {
-            pending_reminder = null;
-            utt.clearAndFree(alloc);
-        }
 
         if (collect_frames > 0) {
             collect_frames -= 1;
@@ -1012,7 +1020,7 @@ pub fn main(init: std.process.Init) !void {
                 gate_hold = GATE_HOLD_FRAMES;
             } else if (gate_hold > 0) {
                 gate_hold -= 1;
-            } else if (cfg.gate > 0 and pending_reminder == null) {
+            } else if (cfg.gate > 0) {
                 continue;
             }
         }

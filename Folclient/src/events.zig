@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c");
 const zfmt = @import("zfmt");
+const sync = @import("sync.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -19,6 +20,8 @@ pub const Parsed = struct {
 
 pub var store_path: []const u8 = "folassist_events.txt";
 var list: std.ArrayList(Event) = .empty;
+// Список трогают рабочий поток (добавление по голосу) и главный (popDue).
+var lock: sync.Mutex = .{};
 
 pub fn now() i64 {
     return @intCast(c.time(null));
@@ -205,7 +208,7 @@ fn writeAll(path: []const u8, data: []const u8) void {
     _ = c.fwrite(data.ptr, 1, data.len, f);
 }
 
-pub fn save() void {
+fn saveLocked() void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     for (list.items) |e| {
@@ -220,6 +223,8 @@ pub fn save() void {
 }
 
 pub fn load() void {
+    lock.lock();
+    defer lock.unlock();
     const data = zfmt.readFile(c, alloc, store_path) catch return;
     defer alloc.free(data);
     const t_now = now();
@@ -249,15 +254,19 @@ pub fn load() void {
             };
         }
     }
-    save();
+    saveLocked();
 }
 
 pub fn addAlarm(at: i64) void {
+    lock.lock();
+    defer lock.unlock();
     list.append(alloc, .{ .kind = .alarm, .at = at }) catch return;
-    save();
+    saveLocked();
 }
 
 pub fn addReminder(at: i64, pcm: []const u8) void {
+    lock.lock();
+    defer lock.unlock();
     const path = alloc.print("{s}.{d}.pcm", .{ store_path, at }) catch return;
     writeAll(path, pcm);
     list.append(alloc, .{ .kind = .reminder, .at = at, .pcm = path }) catch {
@@ -265,14 +274,16 @@ pub fn addReminder(at: i64, pcm: []const u8) void {
         alloc.free(path);
         return;
     };
-    save();
+    saveLocked();
 }
 
 pub fn popDue(t: i64) ?Event {
+    lock.lock();
+    defer lock.unlock();
     for (list.items, 0..) |e, i| {
         if (e.at <= t) {
             const ev = list.orderedRemove(i);
-            save();
+            saveLocked();
             return ev;
         }
     }

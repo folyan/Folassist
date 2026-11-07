@@ -276,11 +276,12 @@ pub const Display = struct {
             .def => def_l | def_r,
             .happy => ledBit(30) | ledBit(2) | ledBit(29) | ledBit(9) | ledBit(11) | ledBit(13),
             .sad => ledBit(22) | ledBit(18) | ledBit(14) | ledBit(15),
-            // непонимание: один глаз в 2 высоты (целая «8»), второй как у def
+            // непонимание: один глаз — цифра «0» (кольцо из 6 сегментов, без средней
+            // черты), второй как у def
             .what => if (WHAT_TALL_EYE == H1)
-                (eyeRing(H1) | ledBit(25)) | def_r
+                eyeRing(H1) | def_r
             else
-                def_l | (eyeRing(M2) | ledBit(10)),
+                def_l | eyeRing(M2),
         };
     }
 
