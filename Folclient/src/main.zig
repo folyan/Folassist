@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const zfmt = @import("zfmt");
 const pubkey = @import("pubkey");
 const events = @import("events.zig");
+const sync = @import("sync.zig");
 const protocol = @import("protocol");
 const display_mod = @import("display.zig");
 const top_leds_mod = @import("top_leds.zig");
@@ -104,6 +105,9 @@ fn log(comptime fmt: []const u8, args: anytype) void {
 // потока нельзя (use-after-close, плюс drain блокировал главный цикл до конца фразы),
 // поэтому главный поток только поднимает флаг, а Speaker сам обрывает вывод через drop.
 var speaker_abort = std.atomic.Value(bool).init(false);
+// До какого момента (мс, монотонные) динамик играет ответ ассистента. Пока это так,
+// микрофон слышит свой же голос: такие куски распознавания отбрасываются.
+var speaking_until = std.atomic.Value(u64).init(0);
 
 const Speaker = struct {
     handle: ?*c.snd_pcm_t = null,
@@ -120,6 +124,13 @@ const Speaker = struct {
 
     fn write(self: *Speaker, rate: u32, pcm: []const u8) void {
         if (speaker_abort.load(.acquire)) return;
+        {
+            const dur_ms: u64 = (@as(u64, pcm.len / 2) * 1000) / @as(u64, rate);
+            const now = sync.nowMs();
+            const prev = speaking_until.load(.acquire);
+            const start = if (prev > now) prev else now;
+            speaking_until.store(start + dur_ms + 400, .release);
+        }
         if (self.handle != null and self.rate != rate) self.close();
         if (self.handle == null) self.open(rate) catch return;
         const h = self.handle.?;
@@ -926,6 +937,7 @@ pub fn main(init: std.process.Init) !void {
     var acc_force_ai = false;
     var collect_frames: u32 = 0;
     var gate_hold: u32 = 0;
+    var echo_was = false;
 
     while (true) {
         disp.tick();
@@ -1029,6 +1041,10 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
+        const echo_now = sync.nowMs() < speaking_until.load(.acquire);
+        if (echo_was and !echo_now) c.SherpaOnnxOnlineStreamReset(rec, stream);
+        echo_was = echo_now;
+
         const got = try feedSherpa(rec, stream, &buf);
         const text = got orelse continue;
         defer alloc.free(text);
@@ -1050,6 +1066,17 @@ pub fn main(init: std.process.Init) !void {
             acc.clearRetainingCapacity();
             c.SherpaOnnxOnlineStreamReset(rec, stream);
             continue;
+        }
+
+        // Эхо: пока динамик играет ответ, финалы распознавания — это ассистент, а не пользователь.
+        // Исключение — «фокус»: тогда прерываем ответ и начинаем слушать.
+        if (echo_now) {
+            if (wake_rest == null) {
+                c.SherpaOnnxOnlineStreamReset(rec, stream);
+                continue;
+            }
+            speaker_abort.store(true, .release);
+            speaking_until.store(0, .release);
         }
 
         var piece: []const u8 = undefined;
